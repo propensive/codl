@@ -1,20 +1,20 @@
 # CoDaLa, a Collaborative Data Language
 
-CoDaLa is a data format for representing structured data, with special features for working with files that may
-be edited by both humans and computers. CoDaLa files keep markup syntax to a minimum, with spaces, newlines and
-the `#` character being the only significant characters
+CoDaLa is a data format for representing structured data, with special features for working with documents that
+may be edited by both humans and computers. CoDaLa files keep markup syntax to a minimum, with spaces, newlines
+and the `#` character being the only significant characters
 
 ## Features
 - Models tree-structured data
-- Minimal markup characters, which is a pleasure to write
-- Computer modifications will not reformat a file
-- JSON or XML can be easily embedded within CoDaLa
+- Markup is minimal, making it more pleasurable to write
+- Facilitates automated modifications which don't reformat a document
+- Can host embedded content (such as XML or JSON) verbatim
 - Lightweight data schemas with simple syntax
-- Extensible editable data verification
-- Fast binary format (BiCoDaLa)
-- Schema compatibility checking
-- Support for comments
-- Data and schemas are composable
+- User-extensible data verification
+- Fast binary format (BiCoDa)
+- Safe schema evolution with compatibility checking
+- Allows comments inline
+- Both data and schemas are composable
 
 Here is an example of some CoDaLa data:
 ```codala
@@ -24,7 +24,7 @@ project main
     name         Alpha
     description  This is a description
 
-  # Todo: 
+  # Todo
   module beta
     name Beta
     description
@@ -32,8 +32,8 @@ project main
         more than one line.
 ```
 
-None of the keys such as `import`, `Project` or `name` have meaning to `CoDaLa`. They are just identifiers, and
-may be defined in a schema, such as:
+The keys such as `import`, `Project` or `name` are not important to the `CoDaLa` format, but may be part of a
+schema that defines the data's structure, such as:
 ```codala-schema
 Project id!
   Module id!
@@ -45,11 +45,11 @@ Project id!
 
 Writing CoDaLa is easy. Each line contains some words, or data, which represent a node in the tree. Each line is
 indented by a number of spaces. If the indentation is the same as the previous line, then the node is a sibling
-or peer--it shares the same parent node. If it is indented two spaces more than the previous line, then it is a
+or peer—it shares the same parent node. If it is indented two spaces more than the previous line, then it is a
 child.
 
-If the line has less indentation than the previous line, then it is the direct child of an earlier node: the
-last one with two fewer spaces of indentation.
+If the line has less indentation than the previous line, then it is the child of an earlier node: the last one
+with two fewer spaces of indentation—exactly as the visual appearance implies.
 
 Any other indentation, including having an odd number of spaces, is considered an error. There is one exception
 to this for supporting multiline strings, which is explained below.
@@ -57,42 +57,89 @@ to this for supporting multiline strings, which is explained below.
 Each data line contains one or more words (or character sequences), separated by spaces. Any number of spaces
 may appear between words without any semantic significance, 
 
-Blank lines may appear anywhere. This format has no significant punctuation other than whitespace, and its
-visual representation should seem very natural to a human reader.
+Blank lines may appear anywhere. This format has no significant punctuation other than whitespace, and it
+should seem very natural to a human reader.
 
 ### Comments
 
 A CoDaLa document may contain human-readable comments. They contain no data, and their contents is not
 interpreted but they are part of the CoDaLa metamodel, and can only appear in certain places in a document.
 
-Comments always begin with a `#` character. If appearing on the same line as data, they must be preceded by at
-least one space.
+Comments always begin with a `#` character. The `#` must either start a line or be preceded by at least one
+space, and must always be followed by one or more spaces.
 
 For example, the line,
 ```codala
-    email user@example.com # The user's email address
+    email user@example.com     # The user's email address
 ```
 would contain the data, `email user@example.com`, and the comment, `The user's email address`, but the line,
 ```codala
     url https://example.com/page#ref
 ```
-would not contain any comment.
-
-A comment may also appear alone on a line, but whitespace is significant. Standalone comments must not be
-indented, and must be followed by at least one blank line. For example,
+and,
 ```codala
-# Directory structure:
+  reference #foo
+```
+would not contain any comments.
 
-home
-  work
-  data
+A comment may also appear alone on a line, but the whitespace around it is significant: it must exist at
+a valid indentation level, that is, preceded by an even number of spaces, and up to one level higher than
+the previous line.
+
+For example, like this,
+```codala
+usr
+  local
+    bin
+    
+      # This is a valid comment
+```
+or this,
+```codala
+usr
+  local
+    bin
+    
+  # This is a valid comment
+```
+but not this,
+```codala
+usr
+  local
+    bin
+    
+          # This is a valid comment
+```
+or this:
+```codala
+usr
+  local
+    bin
+
+ # This is a valid comment
 ```
 
-The attachment of comments determines how they are handled during automated modification of a CoDaLa document.
-If a node is _deleted_ then any attached comments will also be removed. Standalone comments are never deleted.
+Comments are _attached_ to data nodes, and their attachment is determined by the whitespace around them.
+Comments will attach to a data node if they appear on the line immediately preceding the data, at the same
+level of indentation. If that node is deleted by a computer editor, the comment will be deleted too.
 
-, and determines whether the comment
-is _attached_ to a node.
+Standalone comments may also be followed by blank line, in which case their are attached to the parent node.
+Such comments will be retained even when data nodes around them are modified, but will be removed if the
+parent node is deleted.
+
+An uninterrupted sequence of comment lines at the same indentation level is treated as a single comment.
+
+There are two special rules relating to comments on the first line of a CoDaLa document: if the first line is
+a comment (one or more lines long), then it _must_ be followed by a blank line; and the requirement that the
+`#` be followed by a space is relaxed _only_ for a comment on the first line of the document.
+
+These two exceptions facilitate the inclusion of a shebang line at the start of a document, such as,
+```codala
+#!/usr/bin/env processor
+
+model
+  data
+```
 
 ### Multiline values
 
