@@ -10,105 +10,98 @@ import eucalyptus.*
 
 given Realm(t"codala")
 
-object Binary:
-  def write(number: Int, out: Writer): Unit = out.write((number + 32).toChar)
+object Bin:
+  def write(out: Writer, number: Int): Unit = out.write((number + 32).toChar)
 
-  // def write(nodes: List[Node], out: Writer): Unit =
-  //   out.write('\u00b1')
-  //   out.write('\u00c0')
-  //   out.write('\u00da')
-  //   write(nodes.length, out)
-  //   nodes.foreach(_.write(out))
-  //   out.close()
+  def write(out: Writer, text: Text): Unit =
+    out.write(text.length)
+    out.write(text.s)
 
-  // def read(in: Reader): List[Node] throws BinaryError =
-  //   if in.read != 177 then throw BinaryError("0xb1", 0)
-  //   if in.read != 192 then throw BinaryError("0xc0", 1)
-  //   if in.read != 218 then throw BinaryError("0xda", 2)
-  //   (0 until readNumber(in)).map(_ => Node.read(in)).to(List)
-
+  def write(out: Writer, schema: Schema, structs: List[Struct]): Unit throws CodalaValidationError =
+    write(out, structs.length)
+    structs.foreach:
+      struct =>
+        val idx = schema.keyMap(struct.key)
+        write(out, idx)
+        write(out, schema.allSubschemas(idx), struct.children)
+  
   def readNumber(in: Reader): Int = in.read - 32
 
-object Token:
-  def apply(value: String): Token = Token(0, value, 0)
-  
-  def read(in: Reader): Token =
-    val buf = new Array[Char](Binary.readNumber(in))
+  def readText(in: Reader, length: Int = -1): Text =
+    val buf = new Array[Char](if length == -1 then readNumber(in) else length)
     in.read(buf)
-    Token(0, String(buf), Binary.readNumber(in))
-
-case class Token(start: Int, value: String, padding: Int = 0):
+    String(buf).show
+  
+object Token:
+  def apply(value: Text): Token = Token(0, value, 0)
+  
+case class Token(start: Int, value: Text, padding: Int = 0):
   def end: Int = start + value.length
-  override def toString(): String = value+(" "*padding)
-
-  def write(out: Writer): Unit =
-    Binary.write(value.length, out)
-    out.write(value)
-    Binary.write(padding, out)
-
-object Node
-  // def read(in: Reader): Node =
-  //   val key = Token(keys(Binary.readNumber(in)))
-  //   val values = (0 until Binary.readNumber(in)).map(_ => Token.read(in))
-  //   val children = (0 until Binary.readNumber(in)).map(_ => Node.read(in))
-  //   Node(key, values.to(List), children.to(List))
+  override def toString(): String = (value+(t" "*padding)).s
 
 enum Node:
   case Doc(childNodes: List[Data | Blank])
-  case Blank(length: Int, leadingComment: Option[String])
-  case Data(key: Token, args: List[Token], childNodes: List[Data | Blank], trailingComment: Option[String] = None, leadingComment: Option[String])
-  // def write(out: Writer): Unit =
-  //   Binary.write(keyMap(key.value), out)
-  //   Binary.write(params.length, out)
-  //   params.foreach(_.write(out))
-  //   Binary.write(children.length, out)
-  //   children.foreach(_.write(out))
+  case Blank(start: Int, length: Int, leadingComment: Option[Text])
+  case Data(key: Token, args: List[Token], childNodes: List[Data | Blank],
+                trailingComment: Option[Text] = None, leadingComment: Option[Text])
+
+  def data: List[Data] = children.sift[Data]
+
+  def pos: Int = this match
+    case Doc(nodes)            => nodes.headOption.map(_.pos).getOrElse(0)
+    case Blank(pos, _, _)      => pos
+    case Data(key, _, _, _, _) => key.start
 
   def children: List[Data | Blank] = this match
-    case Doc(childNodes) => childNodes
-    case Blank(_, _) => Nil
-    case Data(_, _, childNodes, _, _) => childNodes
+    case Doc(nodes)              => nodes
+    case Blank(_, _, _)          => Nil
+    case Data(_, _, nodes, _, _) => nodes
 
   def params: List[Token] = this match
-    case Doc(childNodes) => Nil
-    case Blank(_, _) => Nil
+    case Doc(_)                   => Nil
+    case Blank(_, _, _)           => Nil
     case Data(_, params, _, _, _) => params
 
-  def comment: Option[String] = this match
-    case Doc(_) => None
-    case Blank(_, c) => c
-    case Data(_, _, _, _, c) => c
+  def comment: Option[Text] = this match
+    case Doc(_)                    => None
+    case Blank(_, _, comment)      => comment
+    case Data(_, _, _, _, comment) => comment
 
-  def apply(): String = this match
-    case Data(key, params, children, comment, leadingComment) => (key :: params).map(_.value).mkString(" ")
-    case Doc(children) => ""
-    case Blank(rows, comment) => comment.getOrElse("")
+  def apply(): Text = this match
+    case Data(key, params, _, _, _) => (key :: params).map(_.value).join(t" ")
+    case Doc(children)              => t""
+    case Blank(_, _, comment)       => comment.getOrElse(t"")
 
   def render(indent: Int = 0): Unit = this match
-    case Blank(rows, comment) => println()
-    case Doc(children) => children.foreach(_.render(0))
+    case Blank(_, rows, comment) =>
+      println()
+    case Doc(children) =>
+      children.foreach(_.render(0))
     case Data(key, params, children, comment, leadingComment) =>
       print(" "*(indent*2))
       print(key.value)
       print(" ")
-      println(params.map(_.toString).mkString(" "))
+      println(params.map(_.toString.show).join(t" "))
       children.foreach(_.render(indent + 1))
 
-case class Comment(pos: Int, indent: Int, value: String)
+case class Comment(pos: Int, indent: Int, value: Text)
 
 object Codala:
-  def parse(string: String)(using Log): Node.Doc throws ParseError = parse(StringReader(string))
+  def parse(text: Text): Node.Doc throws CodalaParseError = parse(StringReader(text.s))
 
-  def parse(reader: Reader)(using Log): Node.Doc throws ParseError =
-    var pos = 0
+  def parse(reader: Reader): Node.Doc throws CodalaParseError =
+    import CodalaParseError.Indentation.*
+    var pos: Int = 0
     var char: Int = reader.read()
-    var initialPrefix = 0
+    var initialPrefix: Int = 0
     val buffer: StringBuilder = StringBuilder()
     var comment: Boolean = false
-    var commentOpt: Option[String] = None
-    var multiline: Boolean = false
+    var commentOpt: Option[Text] = None
+    var multiline: Int = -1
     var stack: List[Node.Data] = Nil
-    var node: Node.Data = Node.Data(Token("ROOT"), Nil, Nil, None, None)
+    var node: Node.Data = Node.Data(Token(t"ROOT"), Nil, Nil, None, None)
+    var blank: Int = 0
+    var blankStart: Int = 0
     var currentIndent: Int = 0
     def continue = char != -1 && char != '\n'
     
@@ -124,20 +117,13 @@ object Codala:
       while continue && char == ' ' do next()
       pos - start
     
-    def cue(limit: Int): Boolean =
-      while continue && pos < limit && next() && char == ' ' do ()
-      pos == limit
-    
     def token(): Token =
-      buffer.clear()
       val start = pos
       while
         buffer.append(char.toChar)
         continue && next() && char != ' ' && char != '\n'
       do ()
-      val token = Token(start, buffer.toString, skip())
-      buffer.clear()
-      token
+      Token(start, get(), skip())
     
     def line(): Unit =
       while
@@ -152,12 +138,16 @@ object Codala:
       stack = stack.tail
       currentIndent -= 1
     
+    def get(): Text =
+      val text = buffer.toString.show
+      buffer.clear()
+      text
+
     def param(token: Token): Unit =
-      if token.value == "#" then
+      if token.value == t"#" then
         comment = true
         line()
-        node = node.copy(trailingComment = Some(buffer.toString))
-        buffer.clear()
+        node = node.copy(trailingComment = Some(get()))
       else node = node.copy(args = token :: node.args)
 
     while
@@ -165,47 +155,54 @@ object Codala:
       char == '\n'
     do next()
 
+    def addBlank(): Unit = if blank > 0 then
+      node = node.copy(childNodes = Node.Blank(blankStart, blank, commentOpt) :: node.childNodes)
+      blank = 0
+      commentOpt = None
+
     while char != -1 do
       val count = skip()
       val indent = count/2
 
       if char == '\n' then
         if comment then
-          buffer.clear()
+          commentOpt = Some(get())
           comment = false
+        if blank == 0 then blankStart = pos - count
+        blank += 1
       else if currentIndent + 1 == indent then
-        if comment then throw IndentationAfterCommentError(pos)
-        if multiline then
+        if comment then throw CodalaParseError(pos, AfterComment)
+        if multiline > 0 then
           buffer.append('\n')
           for i <- (currentIndent + 1)*2 until count do buffer.append(' ')
-        else if indent > currentIndent + 2 then throw TooMuchIndentationError(pos)
-        multiline = true
+        else if indent > currentIndent + 2 then throw CodalaParseError(pos, Surplus)
+        multiline = pos
         line()
       else if char == '#' then
         next()
         skip()
+        addBlank()
         if comment then buffer.append('\n') else comment = true
         line()
-      else if count%2 == 1 && !multiline then throw UnevenIndentationError(pos)
+      else if count%2 == 1 && multiline == -1 then throw CodalaParseError(pos, Uneven)
       else
         if comment then
-          commentOpt = Some(buffer.toString)
-          buffer.clear()
+          commentOpt = Some(get())
           comment = false
+       
+        addBlank()
         
-        if multiline then
-          if !buffer.isEmpty then param(Token(buffer.toString))
-          buffer.clear()
-          multiline = false
+        if multiline > 0 then
+          if !buffer.isEmpty then param(Token(multiline, get()))
+          multiline = -1
         
         while indent < currentIndent do pop()
         val tok = token()
         stack ::= node
         
-        if multiline && !buffer.isEmpty then
+        if multiline > 0 && !buffer.isEmpty then
           param(token())
-          buffer.clear()
-          multiline = false
+          multiline = -1
         
         node = Node.Data(tok, Nil, Nil, None, commentOpt)
         commentOpt = None
@@ -214,11 +211,15 @@ object Codala:
       
       next()
       
+      def cue(limit: Int): Boolean =
+        while continue && pos < limit && next() && char == ' ' do ()
+        pos == limit
+    
       if continue && !cue(pos + initialPrefix) && char != '\n' && continue
-      then throw NotEnoughIndentationError(pos)
+      then throw CodalaParseError(pos, Insufficient)
 
-    if multiline then
-      if !buffer.isEmpty then param(Token(buffer.toString))
+    if multiline > 0 && !buffer.isEmpty then param(Token(multiline, get()))
+    if blank > 0 then node = node.copy(childNodes = Node.Blank(blankStart, blank, commentOpt) :: node.childNodes)
 
     while stack.length > 0 do pop()
     
@@ -231,134 +232,158 @@ trait Deserializer[T]:
   def apply(struct: Struct): Option[T]
 
 object Schema:
-  def parse(nodes: List[Node.Data]): List[Schema] throws MultipleIdentifiersError =
-    nodes.map:
+  def parse(doc: Node.Doc): Schema throws MultipleIdentifiersError = 
+    Schema(t"", None, false, false, IArray(), IArray(parseNodes(doc.data)*), true, false)
+
+  def parseNodes(data: List[Node.Data]): List[Schema] throws MultipleIdentifiersError =
+    data.map:
       node =>
-        val repeated = node.key.value.endsWith("*") || node.key.value.endsWith("+")
-        val optional = node.key.value.endsWith("?") || node.key.value.endsWith("*")
-        val key = if repeated || optional then node.key.value.dropRight(1) else node.key.value
+        val repeated = node.key.value.endsWith(t"*") || node.key.value.endsWith(t"+")
+        val optional = node.key.value.endsWith(t"?") || node.key.value.endsWith(t"*")
+        val key = if repeated || optional then node.key.value.drop(1, Rtl) else node.key.value
         
-        val id = node.params.zipWithIndex.filter(_(0).value.endsWith("!")) match
-          case List((id, n)) => println("Found id "+n); Some(n)
+        val id = node.params.zipWithIndex.filter(_(0).value.endsWith(t"!")) match
+          case List((id, n)) => Some(n)
           case Nil           => None
           case _             => throw MultipleIdentifiersError(key, node.key.start)
         
         // FIXME: Checks whether last param is id, not first
         node.params.reverse match
           case Nil =>
-            Schema(key, None, !optional, repeated, Nil, parse(node.children.sift[Node.Data]))
+            Schema(key, None, !optional, repeated, IArray(), IArray(parseNodes(node.data)*))
           
           case param :: rest =>
-            val variadic = param.value.endsWith("*") || param.value.endsWith("+")
-            val skippable = param.value.endsWith("?") || param.value.endsWith("*")
-            val drop = if variadic || skippable || param.value.endsWith("!") then 1 else 0
-            val params = param.value.dropRight(drop) :: rest.map(_.value)
+            val variadic = param.value.endsWith(t"*") || param.value.endsWith(t"+")
+            val skippable = param.value.endsWith(t"?") || param.value.endsWith(t"*")
+            val drop = if variadic || skippable || param.value.endsWith(t"!") then 1 else 0
+            val params = param.value.drop(drop, Rtl) :: rest.map(_.value)
             
-            Schema(key, id, !optional, repeated, params.reverse, parse(node.children.sift[Node.Data]),
-                variadic = variadic, allRequired = !skippable)
+            Schema(key, id, !optional, repeated, IArray(params.reverse*),
+                IArray(parseNodes(node.data)*), variadic = variadic, allRequired = !skippable)
 
-class ParseError(msg: String) extends Exception(msg)
+case class CodalaParseError(pos: Int, indentation: CodalaParseError.Indentation)
+extends Error((t"could not parse Codala document at ", pos, t": ", indentation)):
+  def message: Text = t"could not parse Codala document at $pos: $indentation"
 
-case class UnevenIndentationError(pos: Int)
-extends ParseError(s"expected an even number of indentation spaces at position $pos")
+object CodalaParseError:
+  enum Indentation:
+    case Uneven, AfterComment, Surplus, Insufficient
 
-case class IndentationAfterCommentError(pos: Int)
-extends ParseError(s"indentation appears after a comment at $pos")
-
-case class TooMuchIndentationError(pos: Int)
-extends ParseError(s"too much indentation at $pos")
-
-case class NotEnoughIndentationError(pos: Int)
-extends ParseError(s"not enough indentation at position $pos")
-
-case class BinaryError(expectation: String, pos: Int)
+case class BinaryError(expectation: Text, pos: Int)
 extends Exception(s"expected $expectation at position $pos")
 
-case class MissingParamsError(key: String, minimum: Int, pos: Int)
-extends Exception(s"the key $key requires at least $minimum parameter(s) at position $pos")
+object CodalaValidationError:
+  enum Issue:
+    case MissingParams(count: Int)
+    case MissingKey(key: Text)
+    case DuplicateKey(key: Text, firstPos: Int)
+    case SurplusParams(count: Int)
+    case InvalidKey(key: Text)
+    case DuplicateId(id: Text, firstPos: Int)
 
-case class MissingKeyError(key: String, parent: String, pos: Int)
-extends Exception(s"the key $key is required inside $parent at position $pos")
+import CodalaValidationError.Issue.*
 
-case class InvalidKeyError(key: String, parent: String, pos: Int)
-extends Exception(s"the key $key is not valid inside $parent at position $pos")
+case class CodalaValidationError(schema: Schema, pos: Int, issue: CodalaValidationError.Issue)
+extends Error((t"the Codala document did not conform to the schema ", schema, t" at position ", pos,
+    t" because ", issue)):
+  def message: Text = t"the Codala document did not conform to the schema: ${issue.show}"
 
-case class DuplicateKeyError(key: String, pos: Int, firstPos: Int)
-extends Exception(s"the unique key $key first used at $firstPos is duplicated at $pos")
-
-case class SurplusParamsError(key: String, maximum: Int, pos: Int)
-extends Exception(s"the key $key may have at most $maximum parameters(s) at position $pos")
-
-case class MultipleIdentifiersError(key: String, pos: Int)
+case class MultipleIdentifiersError(key: Text, pos: Int)
 extends Exception(s"multiple parameters of $key have been marked as identifiers at position $pos")
 
-case class DuplicateIdentifierError(id: String, firstPos: Int, pos: Int)
-extends Exception(s"the id $id is duplicated in positions $firstPos and $pos")
 
-case class Struct(key: Token, children: List[Struct]) extends Dynamic:
-  def apply(): String = children.head.key.value
+case class Struct(key: Text, children: List[Struct]) extends Dynamic:
+  def apply(idx: Int = 0): Text = children(idx).key
   def as[T](using deserializer: Deserializer[T]): T = deserializer(this).get
-  def selectDynamic(key: String): Struct = children.find(_.key.value == key).get
-  def applyDynamic(key: String)(): String = selectDynamic(key).apply()
-  
-  def render(indent: Int = 0): Unit =
-    print("  "*indent)
-    println(key.value)
-    children.foreach(_.render(indent + 1))
+  def selectDynamic(key: String): Struct = children.find(_.key == key.show).get
+  def applyDynamic(key: String)(): Text = selectDynamic(key).apply()
+
+object ValidDoc:
+  def read(schema: Schema, text: Text): ValidDoc throws BinaryError =
+    schema.read(StringReader(text.s))
 
 
-case class Schema(key: String, identifier: Option[Int], required: Boolean, repeatable: Boolean,
-                      params: List[String] = Nil, children: List[Schema] = Nil,
+case class ValidDoc(schema: Schema, data: List[Struct]):
+  def bin: Text =
+    val writer = StringWriter()
+    unsafely(Bin.write(writer, schema, data))
+    writer.toString.show
+
+
+case class Schema(key: Text, identifier: Option[Int], required: Boolean, repeatable: Boolean,
+                      params: IArray[Text] = IArray(), subschemas: IArray[Schema] = IArray(),
                       allRequired: Boolean = true, variadic: Boolean = false):
-  def apply(token: Token): Schema throws InvalidKeyError =
-    children.find(_.key == token.value).getOrElse:
-      throw InvalidKeyError(token.value, key, token.start)
   
-  def validate(nodes: List[Node.Data]): List[Struct] throws InvalidKeyError | DuplicateKeyError |
-      MissingKeyError | SurplusParamsError | MissingParamsError | DuplicateIdentifierError =
-    nodes.foldLeft(Map[String, Token]()):
+  lazy val allSubschemas = params.map(Schema(_, None, false, false)) ++ subschemas
+
+  lazy val keyMap: Map[Text, Int] = allSubschemas.zipWithIndex.map:
+    (sub, index) => sub.key -> index
+  .to(Map)
+
+  def apply(token: Token): Schema throws CodalaValidationError =
+    keyMap.get(token.value).map(allSubschemas(_)).getOrElse:
+      throw CodalaValidationError(this, token.start, InvalidKey(token.value))
+
+  def read(reader: Reader): ValidDoc throws BinaryError =
+    def readBin(schema: Schema): List[Struct] =
+      (0 until Bin.readNumber(reader)).map:
+        idx =>
+          val subschema = schema.allSubschemas(Bin.readNumber(reader))
+          Struct(subschema.key, readBin(subschema))
+      .to(List)
+    
+    ValidDoc(this, readBin(this))
+
+  def validate(doc: Node.Doc): ValidDoc throws CodalaValidationError =
+    ValidDoc(this, validation(doc))
+
+  def validation(doc: Node.Doc): List[Struct] throws CodalaValidationError =
+    doc.data.foldLeft(Map[Text, Token]()):
       case (map, node) =>
         if !apply(node.key).repeatable && map.contains(node.key.value)
-        then throw DuplicateKeyError(node.key.value, node.key.start, map(node.key.value).start)
+        then
+          val duplication = DuplicateKey(node.key.value, map(node.key.value).start)
+          throw CodalaValidationError(this, node.key.start, duplication)
         else map.updated(node.key.value, node.key)
 
-    val requiredKeys = nodes.map(_.key.value).to(Set)
-    children.filter(_.required).foreach:
-      schema =>
-        if !requiredKeys.contains(schema.key)
-        then throw MissingKeyError(schema.key, key, nodes.last.key.end)
+    val missing = doc.data.foldLeft(subschemas.filter(_.required).map(_.key).to(Set)):
+      (missing, next) => missing - next.key.value
 
-    nodes.foldLeft(Map[String, Token]()):
+    if missing.nonEmpty
+    then throw CodalaValidationError(this, doc.pos, MissingKey(missing.head))
+
+    doc.data.foldLeft(Map[Text, Token]()):
       case (map, node) =>
         apply(node.key).identifier.map(node.params(_)).fold(map):
           ident =>
             if map.contains(ident.value)
-            then throw DuplicateIdentifierError(ident.value, map(ident.value).start, ident.start)
+            then
+              val duplication = DuplicateId(ident.value, map(ident.value).start)
+              throw CodalaValidationError(this, ident.start, duplication)
             else map.updated(ident.value, ident)
 
-    for node <- nodes yield
+    for node <- doc.data yield
       val schema = apply(node.key)
       val minimum = if schema.allRequired then schema.params.length else schema.params.length - 1
       
       if node.params.length < minimum
-      then throw MissingParamsError(node.key.value, minimum, node.key.end)
+      then throw CodalaValidationError(this, node.key.end, MissingParams(minimum))
       
       if !schema.variadic && node.params.length > schema.params.length
-      then throw SurplusParamsError(node.key.value, schema.params.length, node.key.start)
+      then throw CodalaValidationError(this, node.key.start, SurplusParams(schema.params.length))
 
-      def recur(schemaParams: List[String], params: List[Token], list: List[Struct] = Nil)
+      def recur(schemaParams: List[Text], params: List[Text], list: List[Struct] = Nil)
                : List[Struct] =
         schemaParams match
           case Nil =>
             list.reverse
           case head :: Nil =>
-            Struct(Token(head), params.map(Struct(_, Nil))) :: list
+            Struct(head, params.map(Struct(_, Nil))) :: list
           case head :: tail =>
-            recur(tail, params.tail, Struct(Token(head), List(Struct(params.head, Nil))) :: list)
+            recur(tail, params.tail, Struct(head, List(Struct(params.head, Nil))) :: list)
 
-      val paramStructs = recur(schema.params, node.params)
-      
-      Struct(node.key, paramStructs ::: schema.validate(node.children.sift[Node.Data]))
+      val paramStructs = recur(schema.params.to(List), node.params.map(_.value))
+      Struct(node.key.value, paramStructs ++ schema.validation(Node.Doc(node.children.sift[Node.Data])))
 
 enum Multiplicity:
   case One, AtLeastOne, Optional, Many
