@@ -424,10 +424,8 @@ object Tests extends Suite(t"CoDaLa tests"):
             child
             item
               value
-              element one
+              element abc
         """))
-        println(validDoc.data)
-        println("vs")
-        println(roundtrip(validDoc).data)
+        
         validDoc.data -> roundtrip(validDoc).data
       .oldAssert(_ == _)

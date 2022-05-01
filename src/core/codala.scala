@@ -14,17 +14,44 @@ object Bin:
   def write(out: Writer, number: Int): Unit = out.write((number + 32).toChar)
 
   def write(out: Writer, text: Text): Unit =
-    out.write(text.length)
+    write(out, text.length)
     out.write(text.s)
 
-  def write(out: Writer, schema: Schema, structs: List[Struct]): Unit throws CodalaValidationError =
+  def write(out: Writer, doc: ValidDoc): Unit throws CodalaValidationError =
+    out.write("\u00b1\u00c0\u00da")
+    write(out, doc.schema, doc.data)
+
+  private def write(out: Writer, schema: Schema, structs: List[Struct])
+                   : Unit throws CodalaValidationError =
     write(out, structs.length)
+    
     structs.foreach:
-      struct =>
-        val idx = schema.keyMap(struct.key)
+      case Point(key, children) =>
+        val idx: Int = schema.keyMap(key)
         write(out, idx)
-        write(out, schema.allSubschemas(idx), struct.children)
+        write(out, 0)
+        write(out, schema.allSubschemas(idx), children)
+      
+      case KeyValue(key, value) =>
+        val idx: Int = schema.keyMap(key)
+        write(out, idx)
+        write(out, value)
   
+  def readDoc(schema: Schema, reader: Reader): ValidDoc throws BinaryError =
+    if reader.read() != '\u00b1' || reader.read() != '\u00c0' || reader.read() != '\u00da'
+    then throw BinaryError(t"header 0xb1c0da", 0)
+    
+    def recur(schema: Schema): List[Struct] =
+      List.range(0, readNumber(reader)).map:
+        idx =>
+          val idx = readNumber(reader)
+          val subschema = schema.allSubschemas(idx)
+          Bin.readNumber(reader) match
+            case 0 => Point(subschema.key, recur(subschema))
+            case n => KeyValue(subschema.key, readText(reader, n))
+    
+    ValidDoc(schema, recur(schema))
+
   def readNumber(in: Reader): Int = in.read - 32
 
   def readText(in: Reader, length: Int = -1): Text =
@@ -291,22 +318,27 @@ extends Error((t"the Codala document did not conform to the schema ", schema, t"
 case class MultipleIdentifiersError(key: Text, pos: Int)
 extends Exception(s"multiple parameters of $key have been marked as identifiers at position $pos")
 
+sealed trait Struct:
+  def key: Text
+  def apply(idx: Int = 0): Text
 
-case class Struct(key: Text, children: List[Struct]) extends Dynamic:
-  def apply(idx: Int = 0): Text = children(idx).key
+case class KeyValue(key: Text, value: Text) extends Struct:
+  def apply(idx: Int = 0): Text = value
+
+case class Point(key: Text, children: List[Struct]) extends Struct, Dynamic:
   def as[T](using deserializer: Deserializer[T]): T = deserializer(this).get
   def selectDynamic(key: String): Struct = children.find(_.key == key.show).get
-  def applyDynamic(key: String)(): Text = selectDynamic(key).apply()
+  def applyDynamic(key: String)(): Text = selectDynamic(key).apply(0)
+  def apply(idx: Int = 0): Text = children(idx).key
 
 object ValidDoc:
   def read(schema: Schema, text: Text): ValidDoc throws BinaryError =
-    schema.read(StringReader(text.s))
-
+    Bin.readDoc(schema, StringReader(text.s))
 
 case class ValidDoc(schema: Schema, data: List[Struct]):
   def bin: Text =
     val writer = StringWriter()
-    unsafely(Bin.write(writer, schema, data))
+    unsafely(Bin.write(writer, this))
     writer.toString.show
 
 
@@ -323,16 +355,6 @@ case class Schema(key: Text, identifier: Option[Int], required: Boolean, repeata
   def apply(token: Token): Schema throws CodalaValidationError =
     keyMap.get(token.value).map(allSubschemas(_)).getOrElse:
       throw CodalaValidationError(this, token.start, InvalidKey(token.value))
-
-  def read(reader: Reader): ValidDoc throws BinaryError =
-    def readBin(schema: Schema): List[Struct] =
-      (0 until Bin.readNumber(reader)).map:
-        idx =>
-          val subschema = schema.allSubschemas(Bin.readNumber(reader))
-          Struct(subschema.key, readBin(subschema))
-      .to(List)
-    
-    ValidDoc(this, readBin(this))
 
   def validate(doc: Node.Doc): ValidDoc throws CodalaValidationError =
     ValidDoc(this, validation(doc))
@@ -375,15 +397,12 @@ case class Schema(key: Text, identifier: Option[Int], required: Boolean, repeata
       def recur(schemaParams: List[Text], params: List[Text], list: List[Struct] = Nil)
                : List[Struct] =
         schemaParams match
-          case Nil =>
-            list.reverse
-          case head :: Nil =>
-            Struct(head, params.map(Struct(_, Nil))) :: list
-          case head :: tail =>
-            recur(tail, params.tail, Struct(head, List(Struct(params.head, Nil))) :: list)
+          case Nil          => list.reverse
+          //case head :: Nil  => Point(head, params.map(Struct(_, Nil))) :: list
+          case head :: tail => recur(tail, params.tail, KeyValue(head, params.head) :: list)
 
       val paramStructs = recur(schema.params.to(List), node.params.map(_.value))
-      Struct(node.key.value, paramStructs ++ schema.validation(Node.Doc(node.children.sift[Node.Data])))
+      Point(node.key.value, paramStructs ++ schema.validation(Node.Doc(node.children.sift[Node.Data])))
 
 enum Multiplicity:
   case One, AtLeastOne, Optional, Many
