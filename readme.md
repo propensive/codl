@@ -238,7 +238,7 @@ printable UTF-8 characters, making it seamless to copy/paste or to embed within 
 as XML or JSON.
 
 BCoDL should use the custom Media Type `application/x-bcodl`. BiCoDa data always begins with the
-byte sequence, `b1` `c0` `d1`, which looks like `±ÀÚ`.
+byte sequence, `b1` `c0` `d1`, which looks like `±ÀÑ`.
 
 ## Schemas
 

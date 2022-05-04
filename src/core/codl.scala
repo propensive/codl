@@ -262,15 +262,39 @@ object Codl:
     Node.Root(initialPrefix, node.children.reverse)
 
 object Serializer extends Derivation[Serializer]:
-  def join[T](ctx: CaseClass[Serializer, T]): Serializer[T] = ???
+  def join[T](ctx: CaseClass[Serializer, T]): Serializer[T] = value =>
+    val children = ctx.params.map:
+      param => param.typeclass(param.deref(value)).label(param.label.show)
+    
+    Branch(ctx.typeInfo.short.show, 0, children.to(List), None, None)
+  
   def split[T](ctx: SealedTrait[Serializer, T]): Serializer[T] = ???
+
+  given [T: Show]: Serializer[T] = value => Param(t"", value.show, false, 0, None, None)
 
 trait Serializer[T]:
   def apply(value: T): Struct
 
 object Deserializer extends Derivation[Deserializer]:
-  def join[T](ctx: CaseClass[Deserializer, T]): Deserializer[T] = ???
+  def join[T](ctx: CaseClass[Deserializer, T]): Deserializer[T] = value => Some:
+    value match
+      case branch@Branch(key, _, children, _, _) =>
+        ctx.construct:
+          param => param.typeclass(branch.selectDynamic(param.label)).get
+    
   def split[T](ctx: SealedTrait[Deserializer, T]): Deserializer[T] = ???
+
+  given Deserializer[Text] =
+    case Param(key, value, _, _, _, _) => Some(value)
+    case _ => None
+
+  given Deserializer[String] =
+    case Param(key, value, _, _, _, _) => Some(value.s)
+    case _ => None
+
+  given Deserializer[Int] =
+    case Param(key, value, _, _, _, _) => Int.unapply(value)
+    case _ => None
 
 trait Deserializer[T]:
   def apply(struct: Struct): Option[T]
@@ -348,21 +372,25 @@ extends Error((t"the key ", key, t" does not exist in the CoDL document")):
 sealed trait Struct:
   def key: Text
   def apply(idx: Int = 0): Struct
+  def label(key: Text): Struct
 
 case class Param(key: Text, value: Text, multiline: Boolean, padding: Int, leading: Option[Text], trailing: Option[Text]) extends Struct:
   def apply(idx: Int): Struct = ???
   def set(newValue: Text): Param = Param(key, newValue, multiline, padding, leading, trailing)
+  def label(key: Text): Param = Param(key, value, multiline, padding, leading, trailing)
 
 case class Space(length: Int, comment: Option[Text]) extends Struct:
   def children = Nil
   def apply(idx: Int): Struct = ???
   def key: Text = t""
+  def label(key: Text): Space = this
 
 case class Branch(key: Text, padding: Int, children: List[Struct], leading: Option[Text], trailing: Option[Text]) extends Struct, Dynamic:
   def as[T](using deserializer: Deserializer[T]): T = deserializer(this).get
   def selectDynamic(key: String): Struct = children.find(_.key == key.show).get
   def applyDynamic(key: String)(idx: Int): Struct = selectDynamic(key).apply(idx)
   def apply(idx: Int = 0): Struct = children(idx)
+  def label(key: Text): Branch = Branch(key, padding, children, leading, trailing)
 
 object CodlDoc:
   def read(schema: Schema, text: Text): CodlDoc throws BinaryError =
