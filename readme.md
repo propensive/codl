@@ -1,7 +1,7 @@
-# CoDaLa, a Collaborative Data Language
+# CoDL, a Collaborative Data Language
 
-CoDaLa is a data format for representing structured data, with special features for working with documents that
-may be edited by both humans and computers. CoDaLa files keep markup syntax to a minimum, with spaces, newlines
+CoDL is a data format for representing structured data, with special features for working with documents that
+may be edited by both humans and computers. CoDL files keep markup syntax to a minimum, with spaces, newlines
 and the `#` character being the only significant characters
 
 ## Features
@@ -16,8 +16,8 @@ and the `#` character being the only significant characters
 - Allows comments inline
 - Both data and schemas are composable
 
-Here is an example of some CoDaLa data:
-```codala
+Here is an example of some CoDL data:
+```codl
 import parent
 project main
   module alpha
@@ -32,18 +32,18 @@ project main
         more than one line.
 ```
 
-The keys such as `import`, `Project` or `name` are not important to the `CoDaLa` format, but may be part of a
+The keys such as `import`, `Project` or `name` are not important to the `CoDL` format, but may be part of a
 schema that defines the data's structure, such as:
-```codala-schema
+```codl-schema
 Project id!
   Module id!
     name text
     description text+
 ```
 
-## Writing CoDaLa
+## Writing CoDL
 
-Writing CoDaLa is easy. Each line contains some words, or data, which represent a node in the tree. Each line is
+Writing CoDL is easy. Each line contains some words, or data, which represent a node in the tree. Each line is
 indented by a number of spaces. If the indentation is the same as the previous line, then the node is a sibling
 or peer—it shares the same parent node. If it is indented two spaces more than the previous line, then it is a
 child.
@@ -62,22 +62,22 @@ should seem very natural to a human reader.
 
 ### Comments
 
-A CoDaLa document may contain human-readable comments. They contain no data, and their contents is not
-interpreted but they are part of the CoDaLa metamodel, and can only appear in certain places in a document.
+A CoDL document may contain human-readable comments. They contain no data, and their contents is not
+interpreted but they are part of the CoDL metamodel, and can only appear in certain places in a document.
 
 Comments always begin with a `#` character. The `#` must either start a line or be preceded by at least one
 space, and must always be followed by one or more spaces.
 
 For example, the line,
-```codala
+```codl
     email user@example.com     # The user's email address
 ```
 would contain the data, `email user@example.com`, and the comment, `The user's email address`, but the line,
-```codala
+```codl
     url https://example.com/page#ref
 ```
 and,
-```codala
+```codl
   reference #foo
 ```
 would not contain any comments.
@@ -87,7 +87,7 @@ a valid indentation level, that is, preceded by an even number of spaces, and up
 the previous line.
 
 For example, like this,
-```codala
+```codl
 usr
   local
     bin
@@ -95,7 +95,7 @@ usr
       # This is a valid comment
 ```
 or this,
-```codala
+```codl
 usr
   local
     bin
@@ -103,7 +103,7 @@ usr
   # This is a valid comment
 ```
 but not this,
-```codala
+```codl
 usr
   local
     bin
@@ -111,7 +111,7 @@ usr
           # This is a valid comment
 ```
 or this:
-```codala
+```codl
 usr
   local
     bin
@@ -129,12 +129,12 @@ parent node is deleted.
 
 An uninterrupted sequence of comment lines at the same indentation level is treated as a single comment.
 
-There are two special rules relating to comments on the first line of a CoDaLa document: if the first line is
+There are two special rules relating to comments on the first line of a CoDL document: if the first line is
 a comment (one or more lines long), then it _must_ be followed by a blank line; and the requirement that the
 `#` be followed by a space is relaxed _only_ for a comment on the first line of the document.
 
 These two exceptions facilitate the inclusion of a shebang line at the start of a document, such as,
-```codala
+```codl
 #!/usr/bin/env processor
 
 model
@@ -146,13 +146,13 @@ model
 Sometimes it is necessary to write a value containing more than one line of text, or which contains spaces,
 or the character sequence ` #`, without being considered a comment. This is possible using a _double indent_:
 instead of writing a key and its value on the same line, such as,
-```codala
+```codl
 dog
   name        Fido
   description furry
 ```
 we can write:
-```codala
+```codl
 dog
   name Fido
   description
@@ -160,7 +160,7 @@ dog
 ```
 
 A double-indented value continues so long as its indentation level is maintained. Thus, in,
-```codala
+```codl
 dog
   name Fido
   description
@@ -169,7 +169,7 @@ dog
 ```
 the value of `description` would be, `Furry, brown\nand cuddly`: the newline character (`\n`) is part of the
 value, but the six spaces of indentation are not. Nevertheless, additional spaces may be included:
-```codala
+```codl
   description
       Furry, brown
        and cuddly
@@ -177,8 +177,8 @@ value, but the six spaces of indentation are not. Nevertheless, additional space
 would be interpreted as a `Furry, brown\n and cuddly`, but any subsequent line with less indentation would
 terminate the multiline value, and be interpreted as new data.
 
-This is particularly useful for embedding other languages in CoDaLa. For example,
-```codala
+This is particularly useful for embedding other languages in CoDL. For example,
+```codl
 data
   representations
     json
@@ -201,8 +201,8 @@ Note, in particular, that since the markdown value, `markdown`, is indented as a
 
 ### Embedded form
 
-When embedding CoDaLa data in a host language, we often want to add additional indentation so that the
-embedded CoDaLa aligns with the surrounding code. When a CoDaLa document is parsed, the indentation of the first
+When embedding CoDL data in a host language, we often want to add additional indentation so that the
+embedded CoDL aligns with the surrounding code. When a CoDL document is parsed, the indentation of the first
 line containing data is noted, and subtracted from all subsequent lines.
 
 For example, in Scala we might write,
@@ -216,30 +216,34 @@ object Data:
   """
 ```
 
-It is therefore also possible to interpret any contiguous fragment of a CoDaLa document provided no line
+It is therefore also possible to interpret any contiguous fragment of a CoDL document provided no line
 contains less indentation than the first line of data.
 
 From the example at the top of the page, the fragment,
-```codala
+```codl
   module alpha
     name         Alpha
     description  This is a description
 ```
-is itself a valid CoDaLa document.
+is itself a valid CoDL document.
 
 ## Binary form (BiCoDa)
 
-CoDaLa can provide a convenient way of storing or transmitting tree-structured data. But for fast serialization
+CoDL can provide a convenient way of storing or transmitting tree-structured data. But for fast serialization
 and deserialization, a binary form exists, as a direct translation of the same data model, which can be written
-and read faster, and which uses less memory. This is called BiCoDaLa.
+and read faster, and which uses less memory. This is called BiCoDL.
 
-Although CoDaLa is a _binary_ format, in the sense that it is not for human consumption, it contains only valid
+Although CoDL is a _binary_ format, in the sense that it is not primarily for human consumption, it contains only valid
 printable UTF-8 characters, making it seamless to copy/paste or to embed within other textual data formats, such
 as XML or JSON.
 
-BiCoDaLa should use the custom Media Type `application/x-bicoda`. BiCoDa data always begins with the byte
-sequence, `b1` `c0` `da`, which looks like `±ÀÚ`.
+BCoDL should use the custom Media Type `application/x-bcodl`. BiCoDa data always begins with the
+byte sequence, `b1` `c0` `d1`, which looks like `±ÀÚ`.
 
 ## Schemas
 
+_Todo_
+
 ### Verification
+
+_Todo_

@@ -1,0 +1,48 @@
+{
+  "imports": ["../one/build.irk"],
+  "publishing": {
+    "username": "propensive",
+    "group": "com.propensive",
+    "url": "https://propensive.com/opensource/",
+    "organization": {
+      "name": "Propensive",
+      "url": "https://propensive.com/"
+    },
+    "git": "github.com/propensive",
+    "developers": [
+      {
+        "id": "propensive",
+        "name": "Jon Pretty",
+        "url": "https://github.com/propensive"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "CoDL",
+      "id": "codl/core",
+      "links": ["gossamer/core", "eucalyptus/core"],
+      "sources": ["src/core"],
+      "version": "0.4.0",
+      "docs": ["doc"]
+    },
+    {
+      "name": "CoDL Tests",
+      "id": "codl/test",
+      "links": ["probably/cli", "codl/core"],
+      "sources": ["src/test"],
+      "version": "0.4.0",
+      "docs": ["doc"],
+      "artifact": {
+        "path": "tests.jar",
+	      "type": "fat-jar",
+        "main": "codl.Tests"
+      },
+      "exec": {
+        "browsers": [],
+        "start": "codl.Tests"
+      }
+    }
+  ]
+}
+

@@ -1,4 +1,4 @@
-package codala
+package codl
 
 import probably.*
 import gossamer.*
@@ -10,42 +10,42 @@ given Log(Everything |-> SystemOut)
 
 import unsafeExceptions.canThrowAny
 
-object Tests extends Suite(t"CoDaLa tests"):
+object Tests extends Suite(t"CoDL tests"):
   def run(using Runner): Unit =
     suite(t"Parsing tests"):
       test(t"Parse smallest document"):
-        Codala.parse(t"""|root
+        Codl.parse(t"""|root
                         |""".s.stripMargin.show).children.head()
       .oldAssert(_ == t"root")
       
       test(t"Parse simple tree and get root"):
-        Codala.parse(t"""|root
+        Codl.parse(t"""|root
                         |  child
                         |""".s.stripMargin.show).children.head()
       .oldAssert(_ == t"root")
       
       test(t"Parse simple tree and get child"):
-        Codala.parse(t"""|root
+        Codl.parse(t"""|root
                         |  child
                         |""".s.stripMargin.show).children.head.children.head()
       .oldAssert(_ == t"child")
       
       test(t"Parse more deeply-nested child"):
-        Codala.parse(t"""|root
+        Codl.parse(t"""|root
                         |  child
                         |    node
                         |""".s.stripMargin.show).children.head.children.head.children.head()
       .oldAssert(_ == t"node")
       
       test(t"Allow prefix on first line"):
-        Codala.parse(t"""|  root
+        Codl.parse(t"""|  root
                         |    child
                         |      node
                         |""".s.stripMargin.show).children.head.children.head.children.head()
       .oldAssert(_ == t"node")
       
       test(t"Allow odd prefix on first line"):
-        Codala.parse(t"""|   root
+        Codl.parse(t"""|   root
                         |     child
                         |       node
                         |""".s.stripMargin.show).children.head.children.head.children.head()
@@ -53,41 +53,41 @@ object Tests extends Suite(t"CoDaLa tests"):
 
       test(t"Only one space of indentation fails"):
         capture:
-          Codala.parse(t"""|root
+          Codl.parse(t"""|root
                           | child
                           |""".s.stripMargin.show)
       .matches:
-        case CodalaParseError(6, CodalaParseError.Indentation.Uneven) =>
+        case CodlParseError(6, CodlParseError.Indentation.Uneven) =>
       
       test(t"Indentation less than initial prefix is an error"):
         capture:
-          Codala.parse(t"""|    root
+          Codl.parse(t"""|    root
                           |      child
                           |   broken
                           |""".s.stripMargin.show)
       .matches:
-        case CodalaParseError(24, CodalaParseError.Indentation.Insufficient) =>
+        case CodlParseError(24, CodlParseError.Indentation.Insufficient) =>
 
       test(t"Initial prefix can be after newline"):
-        Codala.parse(t"""
+        Codl.parse(t"""
                       root
                         child
                         """).children.head.children.head()
       .oldAssert(_ == t"child")
       
       test(t"Last line does not need to be terminated"):
-        Codala.parse(t"root")
+        Codl.parse(t"root")
       .oldAssert(_.children.length == 1)
       
       test(t"Comment is not a node"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           #comment
           root
           """)
       .oldAssert(_.children.length == 1)
       
       test(t"Comment may be child"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           node1
             #comment
           node2
@@ -95,29 +95,29 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert(_.children.length == 2)
       
       test(t"Empty string is empty document"):
-        Codala.parse(t"")
+        Codl.parse(t"")
       .oldAssert(_.children.length == 0)
 
       test(t"Document starts with comment"):
-        Codala.parse(t"""|#comment
+        Codl.parse(t"""|#comment
                         |root
                         |""".s.stripMargin.show)
       .oldAssert(_.children.length == 1)
       
       test(t"Unindent after comment forbidden"):
         capture:
-          Codala.parse(t"""|  #comment
+          Codl.parse(t"""|  #comment
                           |root
                           |""".s.stripMargin.show)
       .matches:
-        case CodalaParseError(12, CodalaParseError.Indentation.Insufficient) =>
+        case CodlParseError(12, CodlParseError.Indentation.Insufficient) =>
       
       test(t"root node with params"):
-        Codala.parse(t"root param1 param2").children.head.params.length
+        Codl.parse(t"root param1 param2").children.head.params.length
       .oldAssert(_ == 2)
       
       test(t"root node with children counts params correctly"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root param1 param2
             child1
             child2
@@ -125,7 +125,7 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert(_.length == 2)
       
       test(t"root node with params counts children correctly"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root param1 param2
             child1
             child2
@@ -133,14 +133,14 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert(_.length == 2)
       
       test(t"child node with param"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root param1 param2
             child1 param1
         """).children.head.children.head.params
       .oldAssert(_.length == 1)
       
       test(t"child node with param and trailing comment"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root param1 param2
             child1 param1 # line comment
         """).children.head.children.head.params
@@ -148,25 +148,25 @@ object Tests extends Suite(t"CoDaLa tests"):
       
       test(t"misaligned comments"):
         capture:
-          Codala.parse(t"""
+          Codl.parse(t"""
             root param
               # comment 1
                 # comment 2
                 child1
           """)
-      .oldAssert(_ == CodalaParseError(66, CodalaParseError.Indentation.AfterComment))
+      .oldAssert(_ == CodlParseError(66, CodlParseError.Indentation.AfterComment))
       
       test(t"comment not aligned with associated child"):
         capture:
-          Codala.parse(t"""
+          Codl.parse(t"""
             root param
               # comment 1
                 child1
           """)
-      .oldAssert(_ == CodalaParseError(66, CodalaParseError.Indentation.AfterComment))
+      .oldAssert(_ == CodlParseError(66, CodlParseError.Indentation.AfterComment))
       
       test(t"unindent on comment permitted"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root param
             child1
               grandchild1
@@ -175,7 +175,7 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert { _ => true }
 
       test(t"single unindent"):
-        Codala.parse(t"""|root
+        Codl.parse(t"""|root
                         |  child1
                         |    grandchild1
                         |  child2
@@ -183,7 +183,7 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert(_ == t"child2")
       
       test(t"double unindent"):
-        Codala.parse(t"""|root
+        Codl.parse(t"""|root
                         |  child
                         |    grandchild
                         |root2
@@ -191,7 +191,7 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert(_ == t"root2")
 
       test(t"indented param"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
               Long text
             child
@@ -199,7 +199,7 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert(_ == t"Long text")
       
       test(t"multiline param"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
               Line 1
               Line 2
@@ -208,7 +208,7 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert(_ == t"Line 1\nLine 2")
       
       test(t"multiline param allows uneven indentation"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
               Line 1
                Line 2
@@ -217,21 +217,21 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert(_ == t"Line 1\n Line 2")
       
       test(t"indented param can be last thing in doc"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
               Long text
         """).children.head.params.head.value
       .oldAssert(_ == t"Long text")
       
       test(t"multiline param includes trailing spaces"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
               Long text   
         """).children.head.params.head.value
       .oldAssert(_ == t"Long text   ")
       
       test(t"multiline param excludes trailing newline"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
               Long text
 
@@ -239,21 +239,21 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert(_ == t"Long text")
       
       test(t"multiline param is not a comment"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
               # Long text
         """).children.head.params.head.value
       .oldAssert(_ == t"# Long text")
       
       test(t"trailing comment is not a param"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
             child abc # comment
         """).children.head.children.head.params
       .oldAssert(_.length == 1)
       
       test(t"trailing comment is accessible"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
             child abc # comment
         """).children.head.children.head match
@@ -261,54 +261,44 @@ object Tests extends Suite(t"CoDaLa tests"):
       .oldAssert(_ == Some(t"comment"))
       
       test(t"leading comment is accessible"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
             # message
             child abc
         """).children.head.children.head.comment
-      .oldAssert(_ == Some(t"message"))
+      .oldAssert(_ == Some(t" message"))
       
       test(t"leading comment is two lines long"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
             # line 1
             # line 2
             child abc
         """).children.head.children.head.comment
-      .oldAssert(_ == Some(t"line 1\nline 2"))
+      .oldAssert(_ == Some(t" line 1\n line 2"))
       
       test(t"blank line separates comments"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
             # line 1
 
             # line 2
             child abc
         """).children.head.children(1).comment
-      .oldAssert(_ == Some(t"line 2"))
+      .oldAssert(_ == Some(t" line 2"))
       
       test(t"standalone comment is accessible"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
             # line 1
 
             # line 2
             child abc
         """).children.head.children.head.comment
-      .oldAssert(_ == Some(t"line 1"))
-      
-      test(t"standalone comment is accessible"):
-        Codala.parse(t"""
-          root
-            # line 1
-
-            # line 2
-            child abc
-        """).children.head.children.head.comment
-      .oldAssert(_ == Some(t"line 1"))
+      .oldAssert(_ == Some(t" line 1"))
       
       test(t"blank lines are counted"):
-        Codala.parse(t"""
+        Codl.parse(t"""
           root
 
 
@@ -319,7 +309,7 @@ object Tests extends Suite(t"CoDaLa tests"):
 
     suite(t"Schema tests"):
 
-      val basicSchema = Schema.parse(Codala.parse(t"""
+      val basicSchema = Schema.parse(Codl.parse(t"""
         root
           item
             value?
@@ -328,7 +318,7 @@ object Tests extends Suite(t"CoDaLa tests"):
       """))
 
       test(t"Simple schema structure"):
-        basicSchema.validate(Codala.parse(t"""
+        basicSchema.validate(Codl.parse(t"""
           root
             item
               value
@@ -337,89 +327,89 @@ object Tests extends Suite(t"CoDaLa tests"):
       
       test(t"Schema doesn't contain child"):
         capture:
-          basicSchema.validate(Codala.parse(t"""
+          basicSchema.validate(Codl.parse(t"""
             root
               child
           """))
       .matches:
-        case CodalaValidationError(_, _, CodalaValidationError.Issue.InvalidKey(t"child")) =>
+        case CodlValidationError(_, _, CodlValidationError.Issue.InvalidKey(t"child")) =>
         
       test(t"required value must be included"):
         capture:
-          basicSchema.validate(Codala.parse(t"""
+          basicSchema.validate(Codl.parse(t"""
             root
           """))
       .matches:
-        case CodalaValidationError(_, _, CodalaValidationError.Issue.MissingKey(t"item")) =>
+        case CodlValidationError(_, _, CodlValidationError.Issue.MissingKey(t"item")) =>
         
       test(t"unique value should not be duplicated"):
         capture:
-          basicSchema.validate(Codala.parse(t"""
+          basicSchema.validate(Codl.parse(t"""
             root
               item
                 value
                 value
           """))
       .matches:
-        case CodalaValidationError(_, _, CodalaValidationError.Issue.DuplicateKey(t"value", _)) =>
+        case CodlValidationError(_, _, CodlValidationError.Issue.DuplicateKey(t"value", _)) =>
       
       test(t"unique value with param should not be duplicated"):
         capture:
-          basicSchema.validate(Codala.parse(t"""
+          basicSchema.validate(Codl.parse(t"""
             root
               item
                 element one
                 element two
           """))
       .matches:
-        case CodalaValidationError(_, _, CodalaValidationError.Issue.DuplicateKey(t"element", _)) =>
+        case CodlValidationError(_, _, CodlValidationError.Issue.DuplicateKey(t"element", _)) =>
 
       test(t"required param is missing"):
         capture:
-          basicSchema.validate(Codala.parse(t"""
+          basicSchema.validate(Codl.parse(t"""
             root
               item
                 element
           """))
       .matches:
-        case CodalaValidationError(_, _, CodalaValidationError.Issue.MissingParams(1)) =>
+        case CodlValidationError(_, _, CodlValidationError.Issue.MissingParams(1)) =>
 
       test(t"too many parameters"):
         capture:
-          basicSchema.validate(Codala.parse(t"""
+          basicSchema.validate(Codl.parse(t"""
             root
               item
                 element one two
           """))
       .matches:
-        case CodalaValidationError(_, _, CodalaValidationError.Issue.SurplusParams(1)) =>
+        case CodlValidationError(_, _, CodlValidationError.Issue.SurplusParams(1)) =>
       
       test(t"duplicated ID"):
         capture:
-          basicSchema.validate(Codala.parse(t"""
+          basicSchema.validate(Codl.parse(t"""
             root
               item
                 option one
                 option one
           """))
       .matches:
-        case CodalaValidationError(_, _, CodalaValidationError.Issue.DuplicateId(t"one", 60)) =>
+        case CodlValidationError(_, _, CodlValidationError.Issue.DuplicateId(t"one", 60)) =>
       
+    val basicSchema = Schema.parse(Codl.parse(t"""
+      root
+        child?
+        item
+          value?
+          element? arg
+          option* id!
+    """))
+    
     suite(t"Binary tests"):
 
-      def roundtrip(doc: ValidDoc): ValidDoc = ValidDoc.read(doc.schema, doc.bin)
-
-      val basicSchema = Schema.parse(Codala.parse(t"""
-        root
-          child?
-          item
-            value?
-            element? arg
-            option* id!
-      """))
+      def roundtrip(doc: CodlDoc): CodlDoc = CodlDoc.read(doc.schema, doc.bin)
 
       test(t"simple structure"):
-        val validDoc = basicSchema.validate(Codala.parse(t"""
+        val validDoc = basicSchema.validate(Codl.parse(t"""
           root
             child
             item
@@ -428,7 +418,7 @@ object Tests extends Suite(t"CoDaLa tests"):
         """))
       
       test(t"serialize simple structure"):
-        val validDoc = basicSchema.validate(Codala.parse(t"""
+        val validDoc = basicSchema.validate(Codl.parse(t"""
           root
             child
             item
@@ -438,3 +428,84 @@ object Tests extends Suite(t"CoDaLa tests"):
         
         validDoc.bin
       .oldAssert(_ == t"""±ÀÚ!  "   ! "   ! ! #abc""")
+
+    suite(t"Serialization tests"):
+
+      def compare(schema: Schema, src: Text): (Text, Text) =
+        src.sub(t" ", t"_") -> schema.validate(Codl.parse(src)).show.sub(t" ", t"_")
+
+      test(t"Simple node with child"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |""".s.stripMargin.show)
+      .oldAssert(_ == _)
+      
+      test(t"Simple node with parameter"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |    element argument
+                                 |""".s.stripMargin.show)
+      .oldAssert(_ == _)
+      
+      test(t"Simple node with indentation"):
+        compare(basicSchema, t"""|   root
+                                 |     item
+                                 |       element argument
+                                 |""".s.stripMargin.show)
+      .oldAssert(_ == _)
+      
+      test(t"Simple node with padded parameter"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |    element   argument
+                                 |""".s.stripMargin.show)
+      .oldAssert(_ == _)
+      
+      test(t"Simple node with trailing comment"):
+        compare(basicSchema, t"""|root
+                                 |  item # comment
+                                 |""".s.stripMargin.show)
+      .oldAssert(_ == _)
+      
+      test(t"Simple node with trailing comment and extra space"):
+        compare(basicSchema, t"""|root
+                                 |  item    # comment
+                                 |""".s.stripMargin.show)
+      .oldAssert(_ == _)
+
+      test(t"Simple node with long parameter"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |    element
+                                 |        This is some text.
+                                 |""".s.stripMargin.show)
+      .oldAssert(_ == _)
+
+      test(t"Simple node with inital comment"):
+        compare(basicSchema, t"""|#!/bin/bash
+                                 |root
+                                 |  item
+                                 |    element
+                                 |        This is some text.
+                                 |""".s.stripMargin.show)
+      .oldAssert(_ == _)
+
+      test(t"Simple node with blank lines"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |
+                                 |    element
+                                 |        This is some text.
+                                 |""".s.stripMargin.show)
+      .oldAssert(_ == _)
+      
+      test(t"Serialize more complex structure"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |    value
+                                 |    # here's a comment
+                                 |    element abc
+                                 |    option xyz
+                                 |  child
+                                 |""".s.stripMargin.show)
+      .oldAssert(_ == _)
