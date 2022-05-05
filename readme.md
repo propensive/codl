@@ -1,4 +1,4 @@
-![CoDL](/doc/logo.svg)
+<img src="/doc/logo.svg" valign="middle" align="center">
 
 # CoDL, a Collaborative Data Language
 
