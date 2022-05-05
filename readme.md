@@ -1,4 +1,4 @@
-<img src="/doc/logo.svg" valign="middle" align="center">
+<p align="center"><img src="/doc/logo.svg" height="300"></p>
 
 # CoDL, a Collaborative Data Language
 
