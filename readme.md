@@ -1,3 +1,5 @@
+![CoDL](/doc/logo.svg)
+
 # CoDL, a Collaborative Data Language
 
 CoDL is a data format for representing structured data, with special features for working with documents that
