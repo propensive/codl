@@ -57,7 +57,7 @@ object Bin:
                       val multiline = text.contains(' ') || text.contains('\n')
                       Param(subschema.key, text, multiline, 0, None, None)
     
-    CodlDoc(0, schema, recur(schema))
+    CodlDoc(schema, recur(schema), 0)
 
   def readNumber(in: Reader): Int = in.read - 32
 
@@ -270,7 +270,10 @@ object Serializer extends Derivation[Serializer]:
   
   def split[T](ctx: SealedTrait[Serializer, T]): Serializer[T] = ???
 
-  given [T: Show]: Serializer[T] = value => Param(t"", value.show, false, 0, None, None)
+  given [T: Show]: Serializer[T] = value =>
+    val text = value.show
+    val multiline = text.contains(' ') || text.contains('\n')
+    Param(t"", text, multiline, 0, None, None)
 
 trait Serializer[T]:
   def apply(value: T): Struct
@@ -299,11 +302,28 @@ object Deserializer extends Derivation[Deserializer]:
 trait Deserializer[T]:
   def apply(struct: Struct): Option[T]
 
-object SchemaGen
+object SchemaGen extends Derivation[SchemaGen]:
+  def join[T](ctx: CaseClass[SchemaGen, T]): SchemaGen[T] = () =>
+    Schema(ctx.typeInfo.short.show, None, true, false, IArray(),
+        IArray(ctx.params.map { param => param.typeclass.schema().copy(key = param.label.show) }*), true, false, false)
+  
+  def split[T](ctx: SealedTrait[SchemaGen, T]): SchemaGen[T] = () => ???
+
+  given SchemaGen[Text] = () =>
+    Schema(t"Text", None, true, false, IArray(), IArray(), true, false, false)
+  
+  given SchemaGen[Int] = () =>
+    Schema(t"Int", None, true, false, IArray(), IArray(), true, false, false)
+
+// case class Schema(key: Text, identifier: Option[Int], required: Boolean, repeatable: Boolean,
+//                       params: IArray[Text] = IArray(), subschemas: IArray[Schema] = IArray(),
+//                       allRequired: Boolean = true, variadic: Boolean = false,
+//                       unitary: Boolean = false):
 
 trait SchemaGen[T]:
-  def schema: Schema
+  def schema(): Schema
 
+extension [T: SchemaGen: Serializer](value: T) def codl: CodlDoc = CodlDoc(value)
 
 object Schema:
   def parse(doc: Node.Root): Schema throws MultipleIdentifiersError = 
@@ -374,7 +394,9 @@ sealed trait Struct:
   def apply(idx: Int = 0): Struct
   def label(key: Text): Struct
 
-case class Param(key: Text, value: Text, multiline: Boolean, padding: Int, leading: Option[Text], trailing: Option[Text]) extends Struct:
+case class Param(key: Text, value: Text, multiline: Boolean = false, padding: Int = 0,
+                     leading: Option[Text] = None, trailing: Option[Text] = None)
+extends Struct:
   def apply(idx: Int): Struct = ???
   def set(newValue: Text): Param = Param(key, newValue, multiline, padding, leading, trailing)
   def label(key: Text): Param = Param(key, value, multiline, padding, leading, trailing)
@@ -385,7 +407,10 @@ case class Space(length: Int, comment: Option[Text]) extends Struct:
   def key: Text = t""
   def label(key: Text): Space = this
 
-case class Branch(key: Text, padding: Int, children: List[Struct], leading: Option[Text], trailing: Option[Text]) extends Struct, Dynamic:
+case class Branch(key: Text, padding: Int = 0, children: List[Struct] = Nil,
+                      leading: Option[Text] = None, trailing: Option[Text] = None)
+extends Struct, Dynamic:
+  
   def as[T](using deserializer: Deserializer[T]): T = deserializer(this).get
   def selectDynamic(key: String): Struct = children.find(_.key == key.show).get
   def applyDynamic(key: String)(idx: Int): Struct = selectDynamic(key).apply(idx)
@@ -393,6 +418,11 @@ case class Branch(key: Text, padding: Int, children: List[Struct], leading: Opti
   def label(key: Text): Branch = Branch(key, padding, children, leading, trailing)
 
 object CodlDoc:
+  def apply[T](value: T)(using gen: SchemaGen[T], serializer: Serializer[T]) =
+    serializer(value) match
+      case Branch(key, value, children, _, _)  => new CodlDoc(gen.schema(), children, 0)
+      case param@Param(key, value, _, _, _, _) => new CodlDoc(gen.schema(), List(param), 0)
+
   def read(schema: Schema, text: Text): CodlDoc throws BinaryError =
     Bin.readDoc(schema, StringReader(text.s))
 
@@ -401,8 +431,7 @@ object CodlDoc:
     doc.serialize(writer)
     writer.toString.show
 
-case class CodlDoc(prefix: Int, schema: Schema, children: List[Struct]) extends Dynamic:
-
+case class CodlDoc(schema: Schema, children: List[Struct], initialPrefix: Int) extends Dynamic:
   def selectDynamic(key: String): Struct = children.find(_.key == key.show).get
   def applyDynamic(key: String)(idx: Int): Struct = selectDynamic(key).apply(idx)
   def apply(idx: Int): Struct = children(idx)
@@ -413,79 +442,86 @@ case class CodlDoc(prefix: Int, schema: Schema, children: List[Struct]) extends 
     writer.toString.show
 
   def serialize(out: Writer): Unit =
-    def cue(indent: Int, newline: Boolean = true) =
-      if newline then out.write('\n')
-      for i <- 0 until indent do out.write(' ')
+    def cue(indent: Int) = for i <- 0 until indent do out.write(' ')
 
-    def comment(text: Text): Unit =
-      text.cut('\n').foreach:
-        line =>
-          out.write('#')
-          out.write(line.s)
-      
     def print(indent: Int, data: List[Struct], first: Boolean): Unit =
-      var firstLine: Boolean = true
-      data.foreach:
-        case Space(length, leading) =>
-          leading.foreach:
-            leading =>
-              cue(indent, !first)
-              comment(leading)
-          for i <- 0 until length do out.write('\n')
+      var oneLine: Boolean = !first
+      var initial: Boolean = first
+      def newline(): Unit = out.write('\n')
+    
+      def commentLines(indent: Int, text: Option[Text]): Unit =
+        text.foreach:
+          text =>
+            text.cut('\n').foreach:
+              line =>
+                cue(indent)
+                out.write('#')
+                out.write(line.s)
+                newline()
+      val last = data.length - 1
+      data.zipWithIndex.foreach:
+        case (Space(length, leading), idx) =>
+          commentLines(indent, leading)
+          for i <- 0 until length do newline()
         
-        case Branch(key, padding, children, leading, trailing) =>
-          leading.foreach:
-            leading =>
-              cue(indent, !first)
-              comment(leading)
-          
-          cue(indent, if leading.isEmpty then !first else true)
+        case (Branch(key, padding, children, leading, trailing), idx) =>
+          if !initial then newline()
+          commentLines(indent, leading)
+          cue(indent)
           out.write(key.s)
           for i <- 0 until padding do out.write(' ')
+          
           trailing.foreach:
             comment =>
               out.write(" # ")
               out.write(comment.s)
+          
           print(indent + 2, children, false)
+          oneLine = false
         
-        case Param(key, value, multiline, padding, leading, trailing) =>
-          if firstLine then
-            leading.foreach:
-              comment =>
-                firstLine = false
-                out.write('#')
-                out.write(comment.s)
-              
+        case (Param(key, value, multiline, padding, leading, trailing), idx) =>
+          if oneLine then
             if multiline then
+              if idx != last then
+                newline()
+                cue(indent)
+                out.write(key.s)
+              
+              oneLine = false
               value.cut('\n').foreach:
                 line =>
-                  cue(indent + 2)
-                  out.write(value.s)
+                  newline()
+                  cue(indent + (if idx == last then 2 else 4))
+                  out.write(line.s)
             else
               out.write(' ')
               out.write(value.s)
             
-            if leading.isEmpty then for i <- 0 until padding do out.write(' ')
-            
-            trailing match
-              case None =>
-              case Some(comment) =>
-                firstLine = false
+            trailing.foreach:
+              comment =>
+                oneLine = false
                 out.write("# ")
                 out.write(comment.s)
+                newline()
           else
-            cue(indent, !first)
+            commentLines(indent, leading)
+            if !(initial && first) then newline()
+            initial = false
+            cue(indent)
             out.write(key.s)
+            
             if multiline then
+              oneLine = false
               value.cut('\n').foreach:
                 line =>
-                  cue(indent + 2)
-                  out.write(value.s)
+                  newline()
+                  cue(indent + 4)
+                  out.write(line.s)
             else
+              out.write(' ')
               out.write(value.s)
-
-    
-    print(prefix, children, true)
+          
+    print(initialPrefix, children, true)
     out.write('\n')
           
 case class Schema(key: Text, identifier: Option[Int], required: Boolean, repeatable: Boolean,
@@ -504,7 +540,7 @@ case class Schema(key: Text, identifier: Option[Int], required: Boolean, repeata
       throw CodlValidationError(this, token.start, InvalidKey(token.value))
 
   def validate(doc: Node.Root): CodlDoc throws CodlValidationError =
-    CodlDoc(doc.initialPrefix, this, validation(doc))
+    CodlDoc(this, validation(doc), doc.initialPrefix)
 
   private def validation(doc: Node.Root): List[Struct] throws CodlValidationError =
     doc.data.foldLeft(Map[Text, Token]()):

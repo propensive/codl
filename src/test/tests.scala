@@ -256,9 +256,9 @@ object Tests extends Suite(t"CoDL tests"):
         Codl.parse(t"""
           root
             child abc # comment
-        """).children.head.children.head match
-          case Node.Data(_, _, _, c, _) => c
-      .oldAssert(_ == Some(t"comment"))
+        """).children.head.children.head
+      .matches:
+        case Node.Data(_, _, _, Some(t"comment"), _) =>
       
       test(t"leading comment is accessible"):
         Codl.parse(t"""
@@ -303,9 +303,9 @@ object Tests extends Suite(t"CoDL tests"):
 
 
             child abc
-        """).children.head.children.head match
-          case blank@Node.Blank(_, _, _) => blank
-      .oldAssert(_.length == 2)
+        """).children.head.children.head
+      .matches:
+        case Node.Blank(_, 2, _) =>
 
     suite(t"Schema tests"):
 
@@ -509,3 +509,55 @@ object Tests extends Suite(t"CoDL tests"):
                                  |  child
                                  |""".s.stripMargin.show)
       .oldAssert(_ == _)
+
+    suite(t"Generic Derivation tests"):
+
+      case class Person(name: Text, age: Int)
+      case class Organisation(name: Text, ceo: Person)
+
+      test(t"write a simple case class"):
+        Person(t"John Smith", 65).codl
+      .matches:
+        case CodlDoc(_, List(
+               Param(t"name", t"John Smith", _, _, _, _),
+               Param(t"age", t"65", _, _, _, _)
+             ), _) =>
+      
+      test(t"write a nested case class"):
+        Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl
+      .matches:
+        case CodlDoc(_, List(
+               Param(t"name", t"Acme Inc", _, _, _, _),
+               Branch(t"ceo", _, List(
+                 Param(t"name", t"John Smith", _, _, _, _),
+                 Param(t"age", t"65", _, _, _, _)
+               ), _, _)
+             ), _) =>
+
+      test(t"serialize a simple case class"):
+        Person(t"John", 65).codl.show
+      .oldAssert(_ == t"""|name John
+                          |age 65
+                          |""".s.stripMargin.show)
+      
+      test(t"serialize a case class with long string"):
+        Person(t"John Smith", 65).codl.show
+      .oldAssert(_ == t"""|name
+                          |    John Smith
+                          |age 65
+                          |""".s.stripMargin.show)
+      
+      test(t"serialize a nested case class"):
+        Organisation(t"Acme", Person(t"John", 65)).codl.show
+      .oldAssert(_ == t"""|name Acme
+                          |ceo John 65
+                          |""".s.stripMargin.show)
+      test(t"serialize a nested case class and long strings"):
+        Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl.show
+      .oldAssert(_ == t"""|name
+                          |    Acme Inc
+                          |ceo
+                          |  name
+                          |      John Smith
+                          |  age 65
+                          |""".s.stripMargin.show)
