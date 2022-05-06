@@ -4,21 +4,21 @@
 
 CoDL is a data format for representing structured data, with special features for working with documents that
 may be edited by both humans and computers. CoDL files keep markup syntax to a minimum, with spaces, newlines
-and the `#` character being the only significant characters
+and `#` the only characters with semantic meaning.
 
 ## Features
 - Models tree-structured data
-- Markup is minimal, making it more pleasurable to write
-- Facilitates automated modifications which don't reformat a document
-- Can host embedded content (such as XML or JSON) verbatim
+- Symbolic markup is minimal, making it more enjoyable to write
+- Automatic modifications don't reformat a document
+- Allows embedded textual content (such as XML or JSON) without escaping
 - Lightweight data schemas with simple syntax
 - User-extensible data verification
-- Fast binary format (BiCoDa)
+- Fast and lightweight binary format (BiCoDa)
 - Safe schema evolution with compatibility checking
-- Allows comments inline
+- Allows comments, which may be attached to data, or not
 - Both data and schemas are composable
 
-Here is an example of some CoDL data:
+Here is an example of CoDL being used to describe a project and modules:
 ```codl
 import parent
 project main
@@ -26,22 +26,28 @@ project main
     name         Alpha
     description  This is a description
 
-  # Todo
-  module beta
-    name Beta
+  # Todo: tidy up this section
+  
+  # Previously called "beta"
+  module gamma
+    name Gamma
     description
         This is a longer description which flows onto
         more than one line.
 ```
 
-The keys such as `import`, `Project` or `name` are not important to the `CoDL` format, but may be part of a
+In this example, the keywords `import`, `project` or `name` are not part of `CoDL`, but may be part of a
 schema that defines the data's structure, such as:
 ```codl-schema
-Project id!
-  Module id!
-    name text
-    description text+
+import  ref!
+project id!
+  module id!
+    name value
+    description? value&
 ```
+Each line defines a keyword, and gives names (e.g. `ref` or `value`) to its parameters, indicating where it
+may appear in the document with indentation. The symbols `!`, `?` and `&` define the multiplicity of a keyword;
+details like whether it is required, unique or may be repeated.
 
 ## Writing CoDL
 
@@ -244,7 +250,42 @@ byte sequence, `b1` `c0` `d1`, which looks like `±ÀÑ`.
 
 ## Schemas
 
-_Todo_
+A CoDL schema is an untyped CoDL document which may be used to verify other CoDL documents. Its structure should
+mirror that of the documents it verifies: each line begins with, and defines, a keyword which may appear at that
+position in the tree. The words that follow are the names of the parameters to that keyword.
+
+Additionally, each keyword or paramater may be suffixed (without space) by a qualifying symbol.
+
+### Qualifiers
+
+- `?`: parameter or keyword is optional; may appear zero or once
+- `+`: parameter or keyword is required and may appear once or many times
+- `*`: parameter or keyword may appear zero, once or many times
+- `!`: parameter is required and must be unique
+- `&`: parameter is the concatenation of remaining words, including spaces and terminated by a newline
+- `~`: keyword may also appear zero, once or many times in this section or any descendant
+
+For example,
+```codl-schema
+child? arg
+```
+specifies the keyword `child` which may optionally appear once, with a required argument called `arg`. This schema
+would validate the document,
+```codl
+child alpha
+```
+
+Or, for example,
+```codl-schema
+employee+ id! name&
+```
+specifies the `employee` keyword which must appear at least once, but may be repeated, with an `id` parameter that
+must be unique, and a `name` parameter, which is the concatenation of the rest of the line. Such a schema would
+verify, for example,
+```codl
+employee sgs Simon G. Smith
+employee rp  Richard Price
+```
 
 ### Verification
 
