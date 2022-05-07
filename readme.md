@@ -2,18 +2,20 @@
 
 # CoDL, a Collaborative Data Language
 
-CoDL is a data format for representing structured data, with special features for working with documents that
-may be edited by both humans and computers. CoDL files keep markup syntax to a minimum, with spaces, newlines
-and `#` the only characters with semantic meaning.
+CoDL is a format for representing tree-structured data, designed for documents that may
+be edited by both humans and computers. CoDL keeps markup to a minimum: spaces and
+newlines define structure, while `#` is the only other meaningful character, for starting
+a comment.
 
 ## Features
 - Models tree-structured data
 - Symbolic markup is minimal, making it more enjoyable to write
 - Automatic modifications don't reformat a document
+- Documents may be untyped or typed
 - Allows embedded textual content (such as XML or JSON) without escaping
 - Lightweight data schemas with simple syntax
 - User-extensible data verification
-- Fast and lightweight binary format (BiCoDa)
+- Fast and lightweight binary format (BiCoDL)
 - Safe schema evolution with compatibility checking
 - Allows comments, which may be attached to data, or not
 - Both data and schemas are composable
@@ -35,7 +37,6 @@ project main
         This is a longer description which flows onto
         more than one line.
 ```
-
 In this example, the keywords `import`, `project` or `name` are not part of `CoDL`, but may be part of a
 schema that defines the data's structure, such as:
 ```codl-schema
@@ -44,6 +45,7 @@ project id!
   module id!
     name value
     description? value&
+    links? link+
 ```
 Each line defines a keyword, and gives names (e.g. `ref` or `value`) to its parameters, indicating where it
 may appear in the document with indentation. The symbols `!`, `?` and `&` define the multiplicity of a keyword;
