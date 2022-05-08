@@ -19,10 +19,10 @@ object Bin:
     out.write(text.s)
 
   def write(out: Writer, doc: CodlDoc): Unit throws CodlValidationError =
-    out.write("\u00b1\u00c0\u00da")
-    write(out, doc.schema, doc.children)
+    out.write("\u00b1\u00c0\u00d1")
+    write(out, Subschema(t"", doc.schema.subschemas, Multiplicity.One), doc.children)
 
-  private def write(out: Writer, schema: Schema, structs: List[Struct])
+  private def write(out: Writer, schema: Subschema, structs: List[Struct])
                    : Unit throws CodlValidationError =
     write(out, structs.length)
     
@@ -34,7 +34,7 @@ object Bin:
         val idx: Int = schema.keyMap(key)
         write(out, idx)
         write(out, 0)
-        write(out, schema.allSubschemas(idx), children)
+        write(out, schema.subschemas(idx), children)
       
       case Param(key, value, _, _, _, _) =>
         val idx: Int = schema.keyMap(key)
@@ -42,22 +42,22 @@ object Bin:
         write(out, value)
   
   def readDoc(schema: Schema, reader: Reader): CodlDoc throws BinaryError =
-    if reader.read() != '\u00b1' || reader.read() != '\u00c0' || reader.read() != '\u00da'
-    then throw BinaryError(t"header 0xb1c0da", 0)
+    if reader.read() != '\u00b1' || reader.read() != '\u00c0' || reader.read() != '\u00d1'
+    then throw BinaryError(t"header 0xb1c0d1", 0)
     
-    def recur(schema: Schema): List[Struct] =
+    def recur(schemas: List[Subschema]): List[Struct] =
       List.range(0, readNumber(reader)).map:
         idx =>
           val idx = readNumber(reader)
-          val subschema = schema.allSubschemas(idx)
+          val subschema = schemas(idx)
           
           Bin.readNumber(reader) match
-            case 0 => Branch(subschema.key, 0, recur(subschema), None, None)
+            case 0 => Branch(subschema.key, 0, recur(subschema.subschemas), None, None)
             case n => val text = readText(reader, n)
                       val multiline = text.contains(' ') || text.contains('\n')
                       Param(subschema.key, text, multiline, 0, None, None)
     
-    CodlDoc(schema, recur(schema), 0)
+    CodlDoc(Schema(schema.subschemas), recur(schema.subschemas), 0)
 
   def readNumber(in: Reader): Int = in.read - 32
 
@@ -80,6 +80,9 @@ enum Node:
                 trailing: Option[Text] = None, leading: Option[Text])
 
   def data: List[Data] = children.sift[Data]
+
+  def as[T: Deserializer: SchemaGen]: T throws CodlValidationError = this match
+    case root@ Root(_, _) => summon[SchemaGen[T]].schema().validate(root).as[T]
 
   def pos: Int = this match
     case Root(_, nodes)        => nodes.headOption.map(_.pos).getOrElse(0)
@@ -277,6 +280,7 @@ object Serializer extends Derivation[Serializer]:
 
 trait Serializer[T]:
   def apply(value: T): Struct
+  def multiplicity: Multiplicity = Multiplicity.One
 
 object Deserializer extends Derivation[Deserializer]:
   def join[T](ctx: CaseClass[Deserializer, T]): Deserializer[T] = value => Some:
@@ -304,60 +308,47 @@ trait Deserializer[T]:
 
 object SchemaGen extends Derivation[SchemaGen]:
   def join[T](ctx: CaseClass[SchemaGen, T]): SchemaGen[T] = () =>
-    Schema(ctx.typeInfo.short.show, None, true, false, IArray(),
-        IArray(ctx.params.map { param => param.typeclass.schema().copy(key = param.label.show) }*), true, false, false)
+    val children = ctx.params.to(List).map:
+      param => Subschema(param.label.show, param.typeclass.schema().subschemas, Multiplicity.One)
+    
+    Schema(children)
   
   def split[T](ctx: SealedTrait[SchemaGen, T]): SchemaGen[T] = () => ???
 
-  given SchemaGen[Text] = () =>
-    Schema(t"Text", None, true, false, IArray(), IArray(), true, false, false)
-  
-  given SchemaGen[Int] = () =>
-    Schema(t"Int", None, true, false, IArray(), IArray(), true, false, false)
-
-// case class Schema(key: Text, identifier: Option[Int], required: Boolean, repeatable: Boolean,
-//                       params: IArray[Text] = IArray(), subschemas: IArray[Schema] = IArray(),
-//                       allRequired: Boolean = true, variadic: Boolean = false,
-//                       unitary: Boolean = false):
+  given SchemaGen[Text] = () => Schema(List(Value))
+  given SchemaGen[Int] = () => Schema(List(Value))
 
 trait SchemaGen[T]:
   def schema(): Schema
 
 extension [T: SchemaGen: Serializer](value: T) def codl: CodlDoc = CodlDoc(value)
 
-object Schema:
+object Subschema:
   def parse(doc: Node.Root): Schema throws MultipleIdentifiersError = 
-    Schema(t"", None, false, false, IArray(), IArray(parseNodes(doc.data)*), true, false)
-
-  def parseNodes(data: List[Node.Data]): List[Schema] throws MultipleIdentifiersError =
-    data.map:
-      node =>
-        val repeated = node.key.value.endsWith(t"*") || node.key.value.endsWith(t"+")
-        val optional = node.key.value.endsWith(t"?") || node.key.value.endsWith(t"*")
-        val key = if repeated || optional then node.key.value.drop(1, Rtl) else node.key.value
-        
-        val id = node.params.zipWithIndex.filter(_(0).value.endsWith(t"!")) match
-          case List((id, n)) => Some(n)
-          case Nil           => None
-          case _             => throw MultipleIdentifiersError(key, node.key.start)
-        
-        // FIXME: Checks whether last param is id, not first
-        node.params.reverse match
-          case Nil =>
-            Schema(key, None, !optional, repeated, IArray(), IArray(parseNodes(node.data)*))
+    def parseNodes(data: List[Node.Data]): List[Subschema] throws MultipleIdentifiersError =
+      data.map:
+        node =>
+          val multiplicity = Multiplicity.parse(node.key.value.last)
+          val key = if multiplicity == Multiplicity.One then node.key.value else node.key.value.drop(1, Rtl)
           
-          case param :: rest =>
-            val variadic = param.value.endsWith(t"*") || param.value.endsWith(t"+")
-            val skippable = param.value.endsWith(t"?") || param.value.endsWith(t"*")
-            val drop = if variadic || skippable || param.value.endsWith(t"!") then 1 else 0
-            val params = param.value.drop(drop, Rtl) :: rest.map(_.value)
-            
-            Schema(key, id, !optional, repeated, IArray(params.reverse*),
-                IArray(parseNodes(node.data)*), variadic = variadic, allRequired = !skippable)
+          val paramSchemas = node.params.map:
+            param =>
+              val multiplicity = Multiplicity.parse(param.value.last)
+              val key = if multiplicity == Multiplicity.One then param.value else param.value.drop(1, Rtl)
+
+              Subschema(key, List(Value), multiplicity)
+          
+          if paramSchemas.count(_.multiplicity == Multiplicity.Unique) > 1
+          then throw MultipleIdentifiersError(key)
+          
+          Subschema(key, paramSchemas ++ parseNodes(node.data), multiplicity)
+    
+    Schema(parseNodes(doc.data))
 
 case class CodlParseError(pos: Int, indentation: CodlParseError.Indentation)
 extends Error((t"could not parse CoDL document at ", pos, t": ", indentation)):
   def message: Text = t"could not parse CoDL document at $pos: $indentation"
+
 
 object CodlParseError:
   enum Indentation:
@@ -368,22 +359,21 @@ extends Exception(s"expected $expectation at position $pos")
 
 object CodlValidationError:
   enum Issue:
-    case MissingParams(count: Int)
     case MissingKey(key: Text)
     case DuplicateKey(key: Text, firstPos: Int)
     case SurplusParams(count: Int)
     case InvalidKey(key: Text)
-    case DuplicateId(id: Text, firstPos: Int)
+    case DuplicateId(id: Text)
 
 import CodlValidationError.Issue.*
 
-case class CodlValidationError(schema: Schema, pos: Int, issue: CodlValidationError.Issue)
-extends Error((t"the CoDL document did not conform to the schema ", schema, t" at position ", pos,
+case class CodlValidationError(schema: SchemaLike, word: Text, issue: CodlValidationError.Issue)
+extends Error((t"the CoDL document did not conform to the schema ", schema, t" at  ", word,
     t" because ", issue)):
   def message: Text = t"the CoDL document did not conform to the schema: ${issue.show}"
 
-case class MultipleIdentifiersError(key: Text, pos: Int)
-extends Exception(s"multiple parameters of $key have been marked as identifiers at position $pos")
+case class MultipleIdentifiersError(key: Text)
+extends Exception(s"multiple parameters of $key have been marked as identifiers")
 
 case class MissingValueError(key: Text)
 extends Error((t"the key ", key, t" does not exist in the CoDL document")):
@@ -394,7 +384,7 @@ sealed trait Struct:
   def apply(idx: Int = 0): Struct
   def label(key: Text): Struct
 
-case class Param(key: Text, value: Text, multiline: Boolean = false, padding: Int = 0,
+case class Param(key: Text, values: List[Text], multiline: Boolean = false, padding: Int = 0,
                      leading: Option[Text] = None, trailing: Option[Text] = None)
 extends Struct:
   def apply(idx: Int): Struct = ???
@@ -435,6 +425,9 @@ case class CodlDoc(schema: Schema, children: List[Struct], initialPrefix: Int) e
   def selectDynamic(key: String): Struct = children.find(_.key == key.show).get
   def applyDynamic(key: String)(idx: Int): Struct = selectDynamic(key).apply(idx)
   def apply(idx: Int): Struct = children(idx)
+
+  def as[T](using deserializer: Deserializer[T]): T =
+    deserializer(Branch(t"", 0, children, None, None)).get
 
   def bin: Text =
     val writer = StringWriter()
@@ -523,88 +516,136 @@ case class CodlDoc(schema: Schema, children: List[Struct], initialPrefix: Int) e
           
     print(initialPrefix, children, true)
     out.write('\n')
-          
-case class Schema(key: Text, identifier: Option[Int], required: Boolean, repeatable: Boolean,
-                      params: IArray[Text] = IArray(), subschemas: IArray[Schema] = IArray(),
-                      allRequired: Boolean = true, variadic: Boolean = false,
-                      unitary: Boolean = false):
+
+sealed trait SchemaLike:
+  def subschemas: List[Subschema]
+  def apply(token: Token): Subschema throws CodlValidationError
   
-  lazy val allSubschemas = params.map(Schema(_, None, false, false, unitary = true)) ++ subschemas
-
-  lazy val keyMap: Map[Text, Int] = allSubschemas.zipWithIndex.map:
-    (sub, index) => sub.key -> index
-  .to(Map)
-
-  def apply(token: Token): Schema throws CodlValidationError =
-    keyMap.get(token.value).map(allSubschemas(_)).getOrElse:
-      throw CodlValidationError(this, token.start, InvalidKey(token.value))
-
-  def validate(doc: Node.Root): CodlDoc throws CodlValidationError =
-    CodlDoc(this, validation(doc), doc.initialPrefix)
-
-  private def validation(doc: Node.Root): List[Struct] throws CodlValidationError =
-    doc.data.foldLeft(Map[Text, Token]()):
+  protected def validation(params: List[Token], data: List[Node.Data | Node.Blank])
+                          : List[Struct] throws CodlValidationError =
+    data.sift[Node.Data].foldLeft(Map[Text, Token]()):
       case (map, node) =>
-        if !apply(node.key).repeatable && map.contains(node.key.value)
+        if !apply(node.key).multiplicity.variadic && map.contains(node.key.value)
         then
           val duplication = DuplicateKey(node.key.value, map(node.key.value).start)
-          throw CodlValidationError(this, node.key.start, duplication)
+          throw CodlValidationError(this, node.key.value, duplication)
         else map.updated(node.key.value, node.key)
 
-    val missing = doc.data.foldLeft(subschemas.filter(_.required).map(_.key).to(Set)):
+    def recur(params: List[Token], subschemas: List[Subschema], acc: List[Struct]): List[Struct] =
+      params match
+        case Nil => acc.reverse
+        case param :: pTail => subschemas match
+          case Nil => ???
+          case subschema :: sTail => subschema.multiplicity match
+            case Multiplicity.One =>
+              val param = Param(subschema.key, List(param.value), false, param.padding, None, None)
+              recur(pTail, sTail, param :: acc)
+            
+            case Multiplicity.Optional =>
+              val param = Param(subschema.key, List(param.value), false, param.padding, None, None)
+              recur(pTail, sTail, param :: acc)
+
+            case Multiplicity.Joined =>
+              val param = Param(subschema.key, List(params.map(_.value).join(t" ")), false, param.padding, None, None)
+              recur(pTail, sTail, param :: acc)
+            
+            case Multiplicity.Many =>
+              val param = Param(subschema.key, params.map(_.value), false, param.padding, None, None)
+              recur(pTail, sTail, param :: acc)
+            
+            case Multiplicity.AtLeastOne =>
+              val param = Param(subschema.key, params.map(_.value), false, param.padding, None, None)
+              recur(pTail, sTail, param :: acc)
+
+    val paramChildren = recur(params, subschemas, Nil)
+    val allData = paramChildren ++ data
+
+    val missing = allData.sift[Node.Data].foldLeft(subschemas.filter(_.multiplicity.required).map(_.key).to(Set)):
       (missing, next) => missing - next.key.value
 
-    if missing.nonEmpty
-    then throw CodlValidationError(this, doc.pos, MissingKey(missing.head))
+    if missing.nonEmpty then throw CodlValidationError(this, t"FIXME", MissingKey(missing.head))
 
-    doc.data.foldLeft(Map[Text, Token]()):
-      case (map, node) =>
-        apply(node.key).identifier.map(node.params(_)).fold(map):
+    data.sift[Node.Data].foldLeft(Set[Text]()):
+      case (set, node) =>
+        apply(node.key).identifier.fold(set):
           ident =>
-            if map.contains(ident.value)
+            if set.contains(ident.key)
             then
-              val duplication = DuplicateId(ident.value, map(ident.value).start)
-              throw CodlValidationError(this, ident.start, duplication)
-            else map.updated(ident.value, ident)
+              val duplication = DuplicateId(ident.key)
+              throw CodlValidationError(this, ident.key, duplication)
+            else set + ident.key
 
-    for node <- doc.children yield
+    for node <- data yield
       node match
         case Node.Blank(start, length, leading) =>
           Space(length, leading)
+        
         case Node.Data(key, params, childNodes, trailing, leading) =>
           val schema = apply(key)
-          val minimum = if schema.allRequired then schema.params.length else schema.params.length - 1
           
-          if params.length < minimum
-          then throw CodlValidationError(this, key.end, MissingParams(minimum))
-          
-          if !schema.variadic && params.length > schema.params.length
-          then throw CodlValidationError(this, key.start, SurplusParams(schema.params.length))
+          // schema.paramLimit.option.foreach:
+          //   limit =>
+          //     if !schema.variadic && params.length > limit
+          //     then throw CodlValidationError(this, key.value, SurplusParams(limit))
     
           def recur(schemaParams: List[Text], params: List[Token], list: List[Struct] = Nil)
-                   : List[Struct] =
+                  : List[Struct] =
             schemaParams match
               case Nil =>
                 list.reverse
               
               case head :: tail =>
-                val param = Param(head, params.head.value, params.head.multiline, params.head.padding, None, None)
+                val param = Param(head, params.head.value, params.head.multiline,
+                    params.head.padding, None, None)
+                
                 recur(tail, params.tail, param :: list)
     
-          val paramStructs = recur(schema.params.to(List), params, Nil)
-          val childStructs = schema.validation(Node.Root(doc.initialPrefix, childNodes))
+          val childStructs = schema.validation(params, childNodes.sift[Node.Data])
           
-          Branch(key.value, key.padding - 1, paramStructs ++ childStructs, leading, trailing)
+          Branch(key.value, key.padding - 1, childStructs, leading, trailing)
+
+object Value extends Subschema(t"", Nil, Multiplicity.One)
+
+case class Schema(subschemas: List[Subschema]) extends SchemaLike:
+  def validate(doc: Node.Root): CodlDoc throws CodlValidationError =
+    CodlDoc(this, validation(Nil, doc.data), doc.initialPrefix)
+  
+  lazy val keyMap: Map[Text, Int] = subschemas.zipWithIndex.map(_.key -> _).to(Map)
+  
+  def apply(token: Token): Subschema throws CodlValidationError =
+    keyMap.get(token.value).map(subschemas(_)).getOrElse:
+      throw CodlValidationError(this, token.value, InvalidKey(token.value))
+
+
+case class Subschema(key: Text, subschemas: List[Subschema], multiplicity: Multiplicity)
+extends SchemaLike:
+  lazy val keyMap: Map[Text, Int] = subschemas.zipWithIndex.map(_.key -> _).to(Map)
+  def identifier: Option[Subschema] = subschemas.find(_.multiplicity == Multiplicity.Unique)
+
+  def apply(token: Token): Subschema throws CodlValidationError =
+    keyMap.get(token.value).map(subschemas(_)).getOrElse:
+      throw CodlValidationError(this, token.value, InvalidKey(token.value))
+
+object Multiplicity:
+  def parse(symbol: Char): Multiplicity = symbol match
+    case '+' => Multiplicity.AtLeastOne
+    case '?' => Multiplicity.Optional
+    case '*' => Multiplicity.Many
+    case '&' => Multiplicity.Joined
+    case '!' => Multiplicity.Unique
+    case _   => Multiplicity.One
 
 enum Multiplicity:
-  case One, AtLeastOne, Optional, Many
+  case One, AtLeastOne, Optional, Many, Joined, Unique
 
-  def combine(that: Multiplicity): Multiplicity = this match
-    case One        => One
-    case Many       => that
-    case AtLeastOne => that match
-      case One | Optional    => One
-      case AtLeastOne | Many => AtLeastOne
-    case Optional   => that match
-      case One | AtLeastOne  => One
-      case Optional | Many   => Optional
+  def required: Boolean = this match
+    case One | Unique | AtLeastOne => true
+    case Optional | Many | Joined  => false
+
+  def variadic: Boolean = this match
+    case Joined | AtLeastOne | Many => true
+    case Optional | Unique | One    => false
+  
+  def repeatable: Boolean = this match
+    case AtLeastOne | Many => true
+    case _                 => false

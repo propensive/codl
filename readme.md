@@ -13,7 +13,7 @@ and the `#` character being the only significant characters
 - Can host embedded content (such as XML or JSON) verbatim
 - Lightweight data schemas with simple syntax
 - User-extensible data verification
-- Fast binary format (BiCoDa)
+- Fast binary format (BiCoDL)
 - Safe schema evolution with compatibility checking
 - Allows comments inline
 - Both data and schemas are composable
@@ -229,7 +229,7 @@ From the example at the top of the page, the fragment,
 ```
 is itself a valid CoDL document.
 
-## Binary form (BiCoDa)
+## Binary form (BiCoDL)
 
 CoDL can provide a convenient way of storing or transmitting tree-structured data. But for fast serialization
 and deserialization, a binary form exists, as a direct translation of the same data model, which can be written
@@ -239,8 +239,8 @@ Although CoDL is a _binary_ format, in the sense that it is not primarily for hu
 printable UTF-8 characters, making it seamless to copy/paste or to embed within other textual data formats, such
 as XML or JSON.
 
-BCoDL should use the custom Media Type `application/x-bcodl`. BiCoDa data always begins with the
-byte sequence, `b1` `c0` `d1`, which looks like `±ÀÑ`.
+BCoDL should use the custom Media Type `application/x-bcodl`. BiCoDL data always begins with the
+byte sequence, `b1` `c0` `d1`, which looks like `±ÀÑ` when interpreted as `UTF-8`.
 
 ## Schemas
 
