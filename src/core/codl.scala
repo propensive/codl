@@ -18,46 +18,47 @@ object Bin:
     write(out, text.length)
     out.write(text.s)
 
-  def write(out: Writer, doc: CodlDoc): Unit throws CodlValidationError =
-    out.write("\u00b1\u00c0\u00d1")
-    write(out, Subschema(t"", doc.schema.subschemas, Multiplicity.One), doc.children)
+  // def write(out: Writer, doc: CodlDoc): Unit throws CodlValidationError =
+  //   out.write("\u00b1\u00c0\u00d1")
+  //   write(out, Subschema(t"", doc.schema.subschemas, Multiplicity.One), doc.children)
 
-  private def write(out: Writer, schema: Subschema, structs: List[Struct])
-                   : Unit throws CodlValidationError =
-    write(out, structs.length)
+  // private def write(out: Writer, schema: Subschema, structs: List[Struct])
+  //                  : Unit throws CodlValidationError =
+  //   write(out, structs.length)
     
-    structs.foreach:
-      case Space(length, comment) =>
-        ()
+  //   structs.foreach:
+  //     case Space(length, comment) =>
+  //       ()
 
-      case Branch(key, _, children, leading, trailing) =>
-        val idx: Int = schema.keyMap(key)
-        write(out, idx)
-        write(out, 0)
-        write(out, schema.subschemas(idx), children)
+  //     case Branch(key, _, children, leading, trailing) =>
+  //       val idx: Int = schema.keyMap(key)
+  //       write(out, idx)
+  //       write(out, 0)
+  //       write(out, schema.subschemas(idx), children)
       
-      case Param(key, value, _, _, _, _) =>
-        val idx: Int = schema.keyMap(key)
-        write(out, idx)
-        write(out, value)
+  //     case Param(key, values, _, _, _, _) =>
+  //       val idx: Int = schema.keyMap(key)
+  //       write(out, idx)
+  //       write(out, values.length)
+  //       values.foreach(write(out, _))
   
-  def readDoc(schema: Schema, reader: Reader): CodlDoc throws BinaryError =
-    if reader.read() != '\u00b1' || reader.read() != '\u00c0' || reader.read() != '\u00d1'
-    then throw BinaryError(t"header 0xb1c0d1", 0)
+  // def readDoc(schema: RootSchema, reader: Reader): CodlDoc throws BinaryError =
+  //   if reader.read() != '\u00b1' || reader.read() != '\u00c0' || reader.read() != '\u00d1'
+  //   then throw BinaryError(t"header 0xb1c0d1", 0)
     
-    def recur(schemas: List[Subschema]): List[Struct] =
-      List.range(0, readNumber(reader)).map:
-        idx =>
-          val idx = readNumber(reader)
-          val subschema = schemas(idx)
+  //   def recur(schemas: List[Subschema]): List[Struct] =
+  //     List.range(0, readNumber(reader)).map:
+  //       idx =>
+  //         val idx = readNumber(reader)
+  //         val subschema = schemas(idx)
           
-          Bin.readNumber(reader) match
-            case 0 => Branch(subschema.key, 0, recur(subschema.subschemas), None, None)
-            case n => val text = readText(reader, n)
-                      val multiline = text.contains(' ') || text.contains('\n')
-                      Param(subschema.key, text, multiline, 0, None, None)
+  //         Bin.readNumber(reader) match
+  //           case 0 => Branch(subschema.key, 0, recur(subschema.subschemas), None, None)
+  //           case n => val values = List.range(0, n).map { _ => readText(reader) }
+  //                     val multiline = values.exists { text => text.contains(' ') || text.contains('\n') }
+  //                     Param(subschema.key, values, multiline, 0, None, None)
     
-    CodlDoc(Schema(schema.subschemas), recur(schema.subschemas), 0)
+  //   CodlDoc(RootSchema(schema.subschemas), recur(schema.subschemas), 0)
 
   def readNumber(in: Reader): Int = in.read - 32
 
@@ -66,284 +67,145 @@ object Bin:
     in.read(buf)
     String(buf).show
   
-object Token:
-  def apply(value: Text): Token = Token(0, value, 0)
+// object Token:
+//   def apply(value: Text): Token = Token(0, value, 0)
   
-case class Token(start: Int, value: Text, padding: Int = 0, multiline: Boolean = false):
-  def end: Int = start + value.length
-  override def toString(): String = (value+(t" "*padding)).s
+// case class Token(start: Int, value: Text, padding: Int = 0, multiline: Boolean = false):
+//   def end: Int = start + value.length
+//   override def toString(): String = (value+(t" "*padding)).s
 
-enum Node:
-  case Root(initialPrefix: Int, childNodes: List[Data | Blank])
-  case Blank(start: Int, length: Int, leading: Option[Text])
-  case Data(key: Token, args: List[Token], childNodes: List[Data | Blank],
-                trailing: Option[Text] = None, leading: Option[Text])
+// enum Node:
+//   case Root(initialPrefix: Int, childNodes: List[Data | Blank])
+//   case Blank(start: Int, length: Int, leading: Option[Text])
+//   case Data(key: Token, args: List[Token], childNodes: List[Data | Blank],
+//                 trailing: Option[Text] = None, leading: Option[Text])
 
-  def data: List[Data] = children.sift[Data]
+//   def data: List[Data] = children.sift[Data]
 
-  def as[T: Deserializer: SchemaGen]: T throws CodlValidationError = this match
-    case root@ Root(_, _) => summon[SchemaGen[T]].schema().validate(root).as[T]
+//   // def as[T: Deserializer: SchemaGen]: T throws CodlValidationError = this match
+//   //   case root@ Root(_, _) => summon[SchemaGen[T]].schema().validate(root).as[T]
 
-  def pos: Int = this match
-    case Root(_, nodes)        => nodes.headOption.map(_.pos).getOrElse(0)
-    case Blank(pos, _, _)      => pos
-    case Data(key, _, _, _, _) => key.start
+//   def pos: Int = this match
+//     case Root(_, nodes)        => nodes.headOption.map(_.pos).getOrElse(0)
+//     case Blank(pos, _, _)      => pos
+//     case Data(key, _, _, _, _) => key.start
 
-  def children: List[Data | Blank] = this match
-    case Root(_, nodes)          => nodes
-    case Blank(_, _, _)          => Nil
-    case Data(_, _, nodes, _, _) => nodes
+//   def children: List[Data | Blank] = this match
+//     case Root(_, nodes)          => nodes
+//     case Blank(_, _, _)          => Nil
+//     case Data(_, _, nodes, _, _) => nodes
 
-  def params: List[Token] = this match
-    case Root(_, _)               => Nil
-    case Blank(_, _, _)           => Nil
-    case Data(_, params, _, _, _) => params
+//   def params: List[Token] = this match
+//     case Root(_, _)               => Nil
+//     case Blank(_, _, _)           => Nil
+//     case Data(_, params, _, _, _) => params
 
-  def comment: Option[Text] = this match
-    case Root(_, _)                => None
-    case Blank(_, _, comment)      => comment
-    case Data(_, _, _, _, comment) => comment
+//   def comment: Option[Text] = this match
+//     case Root(_, _)                => None
+//     case Blank(_, _, comment)      => comment
+//     case Data(_, _, _, _, comment) => comment
 
-  def apply(): Text = this match
-    case Data(key, params, _, _, _) => (key :: params).map(_.value).join(t" ")
-    case Root(_, children)          => t""
-    case Blank(_, _, comment)       => comment.getOrElse(t"")
+//   def apply(): Text = this match
+//     case Data(key, params, _, _, _) => (key :: params).map(_.value).join(t" ")
+//     case Root(_, children)          => t""
+//     case Blank(_, _, comment)       => comment.getOrElse(t"")
 
-  def render(indent: Int = 0): Unit = this match
-    case Blank(_, rows, comment) =>
-      println()
+//   def render(indent: Int = 0): Unit = this match
+//     case Blank(_, rows, comment) =>
+//       println()
     
-    case Root(_, children) =>
-      children.foreach(_.render(0))
+//     case Root(_, children) =>
+//       children.foreach(_.render(0))
     
-    case Data(key, params, children, comment, leading) =>
-      print(" "*(indent*2))
-      print(key.value)
-      print(" ")
-      println(params.map(_.toString.show).join(t" "))
-      children.foreach(_.render(indent + 1))
+//     case Data(key, params, children, comment, leading) =>
+//       print(" "*(indent*2))
+//       print(key.value)
+//       print(" ")
+//       println(params.map(_.toString.show).join(t" "))
+//       children.foreach(_.render(indent + 1))
 
-case class Comment(pos: Int, indent: Int, value: Text)
+// case class Comment(pos: Int, indent: Int, value: Text)
 
-object Codl:
-  def parse(text: Text): Node.Root throws CodlParseError = parse(StringReader(text.s))
-
-  def parse(reader: Reader): Node.Root throws CodlParseError =
-    import CodlParseError.Indentation.*
-    var pos: Int = 0
-    var char: Int = reader.read()
-    var initialPrefix: Int = 0
-    val buffer: StringBuilder = StringBuilder()
-    var comment: Boolean = false
-    var commentOpt: Option[Text] = None
-    var multiline: Int = -1
-    var stack: List[Node.Data] = Nil
-    var node: Node.Data = Node.Data(Token(t"ROOT"), Nil, Nil, None, None)
-    var blank: Int = 0
-    var blankStart: Int = 0
-    var currentIndent: Int = 0
-    def continue = char != -1 && char != '\n'
+// object Serializer extends Derivation[Serializer]:
+//   def join[T](ctx: CaseClass[Serializer, T]): Serializer[T] = value =>
+//     val children = ctx.params.map:
+//       param => param.typeclass(param.deref(value)).label(param.label.show)
     
-    def next(): Boolean =
-      if char != -1 then
-        char = reader.read()
-        pos += 1
-        continue
-      else false
-    
-    def skip(): Int =
-      val start = pos
-      while continue && char == ' ' do next()
-      pos - start
-    
-    def token(): Token =
-      val start = pos
-      while
-        buffer.append(char.toChar)
-        continue && next() && char != ' ' && char != '\n'
-      do ()
-      Token(start, get(), skip())
-    
-    def line(): Unit =
-      while
-        buffer.append(char.toChar)
-        continue && next() && char != '\n'
-      do ()
-
-    def pop(): Unit =
-      val lastNode = node.copy(args = node.args.reverse, childNodes = node.children.reverse)
-      node = stack.head
-      node = node.copy(childNodes = lastNode :: node.children)
-      stack = stack.tail
-      currentIndent -= 1
-    
-    def get(): Text =
-      val text = buffer.toString.show
-      buffer.clear()
-      text
-
-    def param(token: Token): Unit =
-      if token.value == t"#" then
-        comment = true
-        line()
-        node = node.copy(trailing = Some(get()))
-      else node = node.copy(args = token :: node.args)
-
-    while
-      initialPrefix = skip()
-      char == '\n'
-    do next()
-
-    def addBlank(): Unit = if blank > 0 then
-      node = node.copy(childNodes = Node.Blank(blankStart, blank, commentOpt) :: node.childNodes)
-      blank = 0
-      commentOpt = None
-
-    while char != -1 do
-      val count = skip()
-      val indent = count/2
-
-      if char == '\n' then
-        if comment then
-          commentOpt = Some(get())
-          comment = false
-        if blank == 0 then blankStart = pos - count
-        blank += 1
-      else if currentIndent + 1 == indent then
-        if comment then throw CodlParseError(pos, AfterComment)
-        if multiline > 0 then
-          buffer.append('\n')
-          for i <- (currentIndent + 1)*2 until count do buffer.append(' ')
-        else if indent > currentIndent + 2 then throw CodlParseError(pos, Surplus)
-        multiline = pos
-        line()
-      else if char == '#' then
-        next()
-        //skip()
-        addBlank()
-        if comment then buffer.append('\n') else comment = true
-        line()
-      else if count%2 == 1 && multiline == -1 then throw CodlParseError(pos, Uneven)
-      else
-        if comment then
-          commentOpt = Some(get())
-          comment = false
-       
-        addBlank()
-        
-        if multiline > 0 then
-          if !buffer.isEmpty then param(Token(multiline, get(), multiline = true))
-          multiline = -1
-        
-        while indent < currentIndent do pop()
-        val tok = token()
-        stack ::= node
-        
-        if multiline > 0 && !buffer.isEmpty then
-          param(token())
-          multiline = -1
-        
-        node = Node.Data(tok, Nil, Nil, None, commentOpt)
-        commentOpt = None
-        currentIndent += 1
-        while continue do param(token())
-      
-      next()
-      
-      def cue(limit: Int): Boolean =
-        while continue && pos < limit && next() && char == ' ' do ()
-        pos == limit
-    
-      if continue && !cue(pos + initialPrefix) && char != '\n' && continue
-      then throw CodlParseError(pos, Insufficient)
-
-    if multiline > 0 && !buffer.isEmpty then param(Token(multiline, get(), multiline = true))
-    if blank > 0 then node = node.copy(childNodes = Node.Blank(blankStart, blank, commentOpt) :: node.childNodes)
-
-    while stack.length > 0 do pop()
-    
-    Node.Root(initialPrefix, node.children.reverse)
-
-object Serializer extends Derivation[Serializer]:
-  def join[T](ctx: CaseClass[Serializer, T]): Serializer[T] = value =>
-    val children = ctx.params.map:
-      param => param.typeclass(param.deref(value)).label(param.label.show)
-    
-    Branch(ctx.typeInfo.short.show, 0, children.to(List), None, None)
+//     Node(ctx.typeInfo.short.show, 0, children.to(List), None, None)
   
-  def split[T](ctx: SealedTrait[Serializer, T]): Serializer[T] = ???
+//   def split[T](ctx: SealedTrait[Serializer, T]): Serializer[T] = ???
 
-  given [T: Show]: Serializer[T] = value =>
-    val text = value.show
-    val multiline = text.contains(' ') || text.contains('\n')
-    Param(t"", text, multiline, 0, None, None)
+//   given [T: Show]: Serializer[T] = value =>
+//     val text = value.show
+//     val multiline = text.contains(' ') || text.contains('\n')
+//     Value(t"", List(text), multiline, 0, None, None)
 
-trait Serializer[T]:
-  def apply(value: T): Struct
-  def multiplicity: Multiplicity = Multiplicity.One
+// trait Serializer[T]:
+//   def apply(value: T): Node
+//   def multiplicity: Multiplicity = Multiplicity.One
 
-object Deserializer extends Derivation[Deserializer]:
-  def join[T](ctx: CaseClass[Deserializer, T]): Deserializer[T] = value => Some:
-    value match
-      case branch@Branch(key, _, children, _, _) =>
-        ctx.construct:
-          param => param.typeclass(branch.selectDynamic(param.label)).get
+// object Deserializer extends Derivation[Deserializer]:
+//   def join[T](ctx: CaseClass[Deserializer, T]): Deserializer[T] = value => Some:
+//     value match
+//       case branch@Branch(key, _, children, _, _) =>
+//         ctx.construct:
+//           param => param.typeclass(branch.selectDynamic(param.label)).get
     
-  def split[T](ctx: SealedTrait[Deserializer, T]): Deserializer[T] = ???
+//   def split[T](ctx: SealedTrait[Deserializer, T]): Deserializer[T] = ???
 
-  given Deserializer[Text] =
-    case Param(key, value, _, _, _, _) => Some(value)
-    case _ => None
+//   given Deserializer[Text] =
+//     case Param(key, values, _, _, _, _) => Some(values.head)
+//     case _ => None
 
-  given Deserializer[String] =
-    case Param(key, value, _, _, _, _) => Some(value.s)
-    case _ => None
-
-  given Deserializer[Int] =
-    case Param(key, value, _, _, _, _) => Int.unapply(value)
-    case _ => None
-
-trait Deserializer[T]:
-  def apply(struct: Struct): Option[T]
-
-object SchemaGen extends Derivation[SchemaGen]:
-  def join[T](ctx: CaseClass[SchemaGen, T]): SchemaGen[T] = () =>
-    val children = ctx.params.to(List).map:
-      param => Subschema(param.label.show, param.typeclass.schema().subschemas, Multiplicity.One)
-    
-    Schema(children)
+//   given Deserializer[List[Text]] =
+//     case Node(key, values, _, _, _, _) => Some(values)
+//     case _ => None
   
-  def split[T](ctx: SealedTrait[SchemaGen, T]): SchemaGen[T] = () => ???
+//   given Deserializer[Int] =
+//     case Node(key, value-, _, _, _, _) => Int.unapply(values.head)
+//     case _ => None
 
-  given SchemaGen[Text] = () => Schema(List(Value))
-  given SchemaGen[Int] = () => Schema(List(Value))
+// trait Deserializer[T]:
+//   def apply(node: Node): Option[T]
 
-trait SchemaGen[T]:
-  def schema(): Schema
-
-extension [T: SchemaGen: Serializer](value: T) def codl: CodlDoc = CodlDoc(value)
-
-object Subschema:
-  def parse(doc: Node.Root): Schema throws MultipleIdentifiersError = 
-    def parseNodes(data: List[Node.Data]): List[Subschema] throws MultipleIdentifiersError =
-      data.map:
-        node =>
-          val multiplicity = Multiplicity.parse(node.key.value.last)
-          val key = if multiplicity == Multiplicity.One then node.key.value else node.key.value.drop(1, Rtl)
-          
-          val paramSchemas = node.params.map:
-            param =>
-              val multiplicity = Multiplicity.parse(param.value.last)
-              val key = if multiplicity == Multiplicity.One then param.value else param.value.drop(1, Rtl)
-
-              Subschema(key, List(Value), multiplicity)
-          
-          if paramSchemas.count(_.multiplicity == Multiplicity.Unique) > 1
-          then throw MultipleIdentifiersError(key)
-          
-          Subschema(key, paramSchemas ++ parseNodes(node.data), multiplicity)
+// object SchemaGen extends Derivation[SchemaGen]:
+//   def join[T](ctx: CaseClass[SchemaGen, T]): SchemaGen[T] = () =>
+//     val children = ctx.params.to(List).map:
+//       param => Subschema(param.label.show, param.typeclass.schema().subschemas, Multiplicity.One)
     
-    Schema(parseNodes(doc.data))
+//     RootSchema(children)
+  
+//   def split[T](ctx: SealedTrait[SchemaGen, T]): SchemaGen[T] = () => ???
+
+//   given SchemaGen[Text] = () => RootSchema(List(Value))
+//   given SchemaGen[Int] = () => RootSchema(List(Value))
+
+// trait SchemaGen[T]:
+//   def schema(): RootSchema
+
+//extension [T: SchemaGen: Serializer](value: T) def codl: CodlDoc = CodlDoc(value)
+
+// object Subschema:
+//   def parse(doc: Node.Root): RootSchema throws MultipleIdentifiersError = 
+//     def parseNodes(data: List[Node.Data]): List[Subschema] throws MultipleIdentifiersError =
+//       data.map:
+//         node =>
+//           val multiplicity = Multiplicity.parse(node.key.value.last)
+//           val key = if multiplicity == Multiplicity.One then node.key.value else node.key.value.drop(1, Rtl)
+          
+//           val paramSchemas = node.params.map:
+//             param =>
+//               val multiplicity = Multiplicity.parse(param.value.last)
+//               val key = if multiplicity == Multiplicity.One then param.value else param.value.drop(1, Rtl)
+
+//               Subschema(key, List(Value), multiplicity)
+          
+//           if paramSchemas.count(_.multiplicity == Multiplicity.Unique) > 1
+//           then throw MultipleIdentifiersError(key)
+          
+//           Subschema(key, paramSchemas ++ parseNodes(node.data), multiplicity)
+    
+//     RootSchema(parseNodes(doc.data))
 
 case class CodlParseError(pos: Int, indentation: CodlParseError.Indentation)
 extends Error((t"could not parse CoDL document at ", pos, t": ", indentation)):
@@ -352,24 +214,25 @@ extends Error((t"could not parse CoDL document at ", pos, t": ", indentation)):
 
 object CodlParseError:
   enum Indentation:
-    case Uneven, AfterComment, Surplus, Insufficient
+    case Uneven(initial: Int, indent: Int)
+    case AfterComment, Surplus, Insufficient
 
 case class BinaryError(expectation: Text, pos: Int)
 extends Exception(s"expected $expectation at position $pos")
 
 object CodlValidationError:
   enum Issue:
-    case MissingKey(key: Text)
+    case MissingKey(key: Text | SpecialKey)
     case DuplicateKey(key: Text, firstPos: Int)
-    case SurplusParams(count: Int)
-    case InvalidKey(key: Text)
+    case SurplusParams
+    case RequiredAfterOptional
+    case InvalidKey(key: Text | SpecialKey)
     case DuplicateId(id: Text)
 
 import CodlValidationError.Issue.*
 
-case class CodlValidationError(schema: SchemaLike, word: Text, issue: CodlValidationError.Issue)
-extends Error((t"the CoDL document did not conform to the schema ", schema, t" at  ", word,
-    t" because ", issue)):
+case class CodlValidationError(word: Text | SpecialKey, issue: CodlValidationError.Issue)
+extends Error((t"the CoDL document did not conform to the schema at ", word, t" because ", issue)):
   def message: Text = t"the CoDL document did not conform to the schema: ${issue.show}"
 
 case class MultipleIdentifiersError(key: Text)
@@ -379,252 +242,29 @@ case class MissingValueError(key: Text)
 extends Error((t"the key ", key, t" does not exist in the CoDL document")):
   def message: Text = t"the key $key does not exist in the CoDL document"
 
-sealed trait Struct:
-  def key: Text
-  def apply(idx: Int = 0): Struct
-  def label(key: Text): Struct
-
-case class Param(key: Text, values: List[Text], multiline: Boolean = false, padding: Int = 0,
-                     leading: Option[Text] = None, trailing: Option[Text] = None)
-extends Struct:
-  def apply(idx: Int): Struct = ???
-  def set(newValue: Text): Param = Param(key, newValue, multiline, padding, leading, trailing)
-  def label(key: Text): Param = Param(key, value, multiline, padding, leading, trailing)
-
-case class Space(length: Int, comment: Option[Text]) extends Struct:
-  def children = Nil
-  def apply(idx: Int): Struct = ???
-  def key: Text = t""
-  def label(key: Text): Space = this
-
-case class Branch(key: Text, padding: Int = 0, children: List[Struct] = Nil,
-                      leading: Option[Text] = None, trailing: Option[Text] = None)
-extends Struct, Dynamic:
-  
-  def as[T](using deserializer: Deserializer[T]): T = deserializer(this).get
-  def selectDynamic(key: String): Struct = children.find(_.key == key.show).get
-  def applyDynamic(key: String)(idx: Int): Struct = selectDynamic(key).apply(idx)
-  def apply(idx: Int = 0): Struct = children(idx)
-  def label(key: Text): Branch = Branch(key, padding, children, leading, trailing)
-
-object CodlDoc:
-  def apply[T](value: T)(using gen: SchemaGen[T], serializer: Serializer[T]) =
-    serializer(value) match
-      case Branch(key, value, children, _, _)  => new CodlDoc(gen.schema(), children, 0)
-      case param@Param(key, value, _, _, _, _) => new CodlDoc(gen.schema(), List(param), 0)
-
-  def read(schema: Schema, text: Text): CodlDoc throws BinaryError =
-    Bin.readDoc(schema, StringReader(text.s))
-
-  given Show[CodlDoc] = doc =>
-    val writer = StringWriter()
-    doc.serialize(writer)
-    writer.toString.show
-
-case class CodlDoc(schema: Schema, children: List[Struct], initialPrefix: Int) extends Dynamic:
-  def selectDynamic(key: String): Struct = children.find(_.key == key.show).get
-  def applyDynamic(key: String)(idx: Int): Struct = selectDynamic(key).apply(idx)
-  def apply(idx: Int): Struct = children(idx)
-
-  def as[T](using deserializer: Deserializer[T]): T =
-    deserializer(Branch(t"", 0, children, None, None)).get
-
-  def bin: Text =
-    val writer = StringWriter()
-    unsafely(Bin.write(writer, this))
-    writer.toString.show
-
-  def serialize(out: Writer): Unit =
-    def cue(indent: Int) = for i <- 0 until indent do out.write(' ')
-
-    def print(indent: Int, data: List[Struct], first: Boolean): Unit =
-      var oneLine: Boolean = !first
-      var initial: Boolean = first
-      def newline(): Unit = out.write('\n')
-    
-      def commentLines(indent: Int, text: Option[Text]): Unit =
-        text.foreach:
-          text =>
-            text.cut('\n').foreach:
-              line =>
-                cue(indent)
-                out.write('#')
-                out.write(line.s)
-                newline()
-      val last = data.length - 1
-      data.zipWithIndex.foreach:
-        case (Space(length, leading), idx) =>
-          commentLines(indent, leading)
-          for i <- 0 until length do newline()
-        
-        case (Branch(key, padding, children, leading, trailing), idx) =>
-          if !initial then newline()
-          commentLines(indent, leading)
-          cue(indent)
-          out.write(key.s)
-          for i <- 0 until padding do out.write(' ')
-          
-          trailing.foreach:
-            comment =>
-              out.write(" # ")
-              out.write(comment.s)
-          
-          print(indent + 2, children, false)
-          oneLine = false
-        
-        case (Param(key, value, multiline, padding, leading, trailing), idx) =>
-          if oneLine then
-            if multiline then
-              if idx != last then
-                newline()
-                cue(indent)
-                out.write(key.s)
-              
-              oneLine = false
-              value.cut('\n').foreach:
-                line =>
-                  newline()
-                  cue(indent + (if idx == last then 2 else 4))
-                  out.write(line.s)
-            else
-              out.write(' ')
-              out.write(value.s)
-            
-            trailing.foreach:
-              comment =>
-                oneLine = false
-                out.write("# ")
-                out.write(comment.s)
-                newline()
-          else
-            commentLines(indent, leading)
-            if !(initial && first) then newline()
-            initial = false
-            cue(indent)
-            out.write(key.s)
-            
-            if multiline then
-              oneLine = false
-              value.cut('\n').foreach:
-                line =>
-                  newline()
-                  cue(indent + 4)
-                  out.write(line.s)
-            else
-              out.write(' ')
-              out.write(value.s)
-          
-    print(initialPrefix, children, true)
-    out.write('\n')
-
-sealed trait SchemaLike:
+sealed trait Schema:
+  lazy val keyMap: Map[Text | SpecialKey, Int] = subschemas.zipWithIndex.map(_.key -> _).to(Map)
   def subschemas: List[Subschema]
-  def apply(token: Token): Subschema throws CodlValidationError
+  def freeform = keyMap.contains(SpecialKey.UntypedNode) || keyMap.contains(SpecialKey.UntypedValue)
   
-  protected def validation(params: List[Token], data: List[Node.Data | Node.Blank])
-                          : List[Struct] throws CodlValidationError =
-    data.sift[Node.Data].foldLeft(Map[Text, Token]()):
-      case (map, node) =>
-        if !apply(node.key).multiplicity.variadic && map.contains(node.key.value)
-        then
-          val duplication = DuplicateKey(node.key.value, map(node.key.value).start)
-          throw CodlValidationError(this, node.key.value, duplication)
-        else map.updated(node.key.value, node.key)
-
-    def recur(params: List[Token], subschemas: List[Subschema], acc: List[Struct]): List[Struct] =
-      params match
-        case Nil => acc.reverse
-        case param :: pTail => subschemas match
-          case Nil => ???
-          case subschema :: sTail => subschema.multiplicity match
-            case Multiplicity.One =>
-              val param = Param(subschema.key, List(param.value), false, param.padding, None, None)
-              recur(pTail, sTail, param :: acc)
-            
-            case Multiplicity.Optional =>
-              val param = Param(subschema.key, List(param.value), false, param.padding, None, None)
-              recur(pTail, sTail, param :: acc)
-
-            case Multiplicity.Joined =>
-              val param = Param(subschema.key, List(params.map(_.value).join(t" ")), false, param.padding, None, None)
-              recur(pTail, sTail, param :: acc)
-            
-            case Multiplicity.Many =>
-              val param = Param(subschema.key, params.map(_.value), false, param.padding, None, None)
-              recur(pTail, sTail, param :: acc)
-            
-            case Multiplicity.AtLeastOne =>
-              val param = Param(subschema.key, params.map(_.value), false, param.padding, None, None)
-              recur(pTail, sTail, param :: acc)
-
-    val paramChildren = recur(params, subschemas, Nil)
-    val allData = paramChildren ++ data
-
-    val missing = allData.sift[Node.Data].foldLeft(subschemas.filter(_.multiplicity.required).map(_.key).to(Set)):
-      (missing, next) => missing - next.key.value
-
-    if missing.nonEmpty then throw CodlValidationError(this, t"FIXME", MissingKey(missing.head))
-
-    data.sift[Node.Data].foldLeft(Set[Text]()):
-      case (set, node) =>
-        apply(node.key).identifier.fold(set):
-          ident =>
-            if set.contains(ident.key)
-            then
-              val duplication = DuplicateId(ident.key)
-              throw CodlValidationError(this, ident.key, duplication)
-            else set + ident.key
-
-    for node <- data yield
-      node match
-        case Node.Blank(start, length, leading) =>
-          Space(length, leading)
-        
-        case Node.Data(key, params, childNodes, trailing, leading) =>
-          val schema = apply(key)
-          
-          // schema.paramLimit.option.foreach:
-          //   limit =>
-          //     if !schema.variadic && params.length > limit
-          //     then throw CodlValidationError(this, key.value, SurplusParams(limit))
-    
-          def recur(schemaParams: List[Text], params: List[Token], list: List[Struct] = Nil)
-                  : List[Struct] =
-            schemaParams match
-              case Nil =>
-                list.reverse
-              
-              case head :: tail =>
-                val param = Param(head, params.head.value, params.head.multiline,
-                    params.head.padding, None, None)
-                
-                recur(tail, params.tail, param :: list)
-    
-          val childStructs = schema.validation(params, childNodes.sift[Node.Data])
-          
-          Branch(key.value, key.padding - 1, childStructs, leading, trailing)
+  def apply(key: Text): Schema throws CodlValidationError =
+    if freeform then RootSchema.Freeform else keyMap.get(key).map(subschemas(_)).getOrElse:
+      throw CodlValidationError(key, InvalidKey(key))
 
 object Value extends Subschema(t"", Nil, Multiplicity.One)
 
-case class Schema(subschemas: List[Subschema]) extends SchemaLike:
-  def validate(doc: Node.Root): CodlDoc throws CodlValidationError =
-    CodlDoc(this, validation(Nil, doc.data), doc.initialPrefix)
-  
-  lazy val keyMap: Map[Text, Int] = subschemas.zipWithIndex.map(_.key -> _).to(Map)
-  
-  def apply(token: Token): Subschema throws CodlValidationError =
-    keyMap.get(token.value).map(subschemas(_)).getOrElse:
-      throw CodlValidationError(this, token.value, InvalidKey(token.value))
+object RootSchema:
+  val Freeform = RootSchema(List(Subschema(SpecialKey.UntypedNode, List(Subschema(
+      SpecialKey.UntypedValue, Nil, Multiplicity.Many)), Multiplicity.Many)))
 
+case class RootSchema(subschemas: List[Subschema]) extends Schema
 
-case class Subschema(key: Text, subschemas: List[Subschema], multiplicity: Multiplicity)
-extends SchemaLike:
-  lazy val keyMap: Map[Text, Int] = subschemas.zipWithIndex.map(_.key -> _).to(Map)
+case class Subschema(key: Text | SpecialKey, subschemas: List[Subschema], multiplicity: Multiplicity)
+extends Schema:
   def identifier: Option[Subschema] = subschemas.find(_.multiplicity == Multiplicity.Unique)
 
-  def apply(token: Token): Subschema throws CodlValidationError =
-    keyMap.get(token.value).map(subschemas(_)).getOrElse:
-      throw CodlValidationError(this, token.value, InvalidKey(token.value))
+enum SpecialKey:
+  case UntypedValue, UntypedNode
 
 object Multiplicity:
   def parse(symbol: Char): Multiplicity = symbol match
@@ -649,3 +289,241 @@ enum Multiplicity:
   def repeatable: Boolean = this match
     case AtLeastOne | Many => true
     case _                 => false
+
+opaque type Character = Int
+object Character:
+  val End: Character = Character(-1)
+  def apply(int: Int): Character = int
+  
+  given Typeable[Character] with
+    def unapply(value: Any): Option[value.type & Character] = value match
+      case char: Char => Some(value.asInstanceOf[value.type & Character])
+      case _          => None
+
+  erased given CanEqual[Char, Character] = compiletime.erasedValue
+  erased given CanEqual[Character, Char] = compiletime.erasedValue
+
+  extension (char: Character)
+    def char: Char = if char == -1 then '\u0000' else char.toChar
+    def int: Int = char
+
+object Tokenizer:
+  enum Token:
+    case Word(text: Text, position: Int)
+    case Padding(count: Int, position: Int)
+    case Newline(position: Int)
+
+    def serialize: Text = this match
+      case Word(text, _)     => text
+      case Padding(count, _) => t" "*count
+      case Newline(_)        => t"\n"
+
+    def whitespace: Boolean = this match
+      case Word(_, _) => false
+      case _          => true
+    
+    def newline: Boolean = this match
+      case Newline(_) => true
+      case _          => false
+  
+class Tokenizer(private val in: Reader):
+  private var pos: Int = 0
+  private val buf: StringBuilder = StringBuilder()
+  private var cur: Character = Character(in.read())
+  private var spaces: Int = 0
+
+  private inline def read(): Unit =
+    cur = Character(in.read())
+    pos += 1
+
+  def stream(): LazyList[Tokenizer.Token] =
+    @tailrec
+    def readSpaces(count: Int = 0): Int = if cur != ' ' then count else
+      read()
+      readSpaces(count + 1)
+
+
+    @tailrec
+    def readWord(): Text =
+      if cur == ' ' || cur == Character.End || cur == '\n' then buf.toString.show else
+        buf.append(cur.char)
+        read()
+        readWord()
+    
+    cur match
+      case Character.End => LazyList()
+      case '\n'          => read()
+                            Tokenizer.Token.Newline(pos - 1) #:: stream()
+      case ' '           => val count = readSpaces()
+                            Tokenizer.Token.Padding(count, pos - count) #:: stream()
+      case other         => buf.clear()
+                            val word = readWord()
+                            Tokenizer.Token.Word(word, pos - word.length) #:: stream()
+
+case class Doc(schema: RootSchema, children: List[Point])
+trait Point:
+  def children: List[Point]
+
+trait Data extends Point:
+  def key: Text | SpecialKey
+
+case class Gap(comments: List[Text], lines: Int) extends Point:
+  def children: List[Point] = Nil
+
+case class Node(key: Text | SpecialKey, params: List[Value] = Nil, lineComment: Option[Text] = None,
+                      content: Option[Value] = None, children: List[Point] = Nil,
+                      comments: List[Text] = Nil)
+extends Data
+
+case class Value(key: Text | SpecialKey, padding: Int, value: Text) extends Data:
+  def children: List[Point] = Nil
+
+enum Line:
+  case Dataline(key: Text, data: List[Tokenizer.Token])
+  case Blank(count: Int)
+  case Comment(text: Text)
+  case Multiline(text: Text)
+  case Indent
+  case Outdent
+
+enum UntypedNode:
+  case Data(key: Text, data: List[Tokenizer.Token] = Nil, longLines: List[Text] = Nil,
+                children: List[UntypedNode] = Nil, comment: List[Text] = Nil)
+
+  case Blank(count: Int, comment: List[Text] = Nil)
+
+object Codl:
+  def parse(text: Text): Doc throws CodlParseError | CodlValidationError =
+    parse(StringReader(text.s), RootSchema.Freeform)
+
+  def parse(reader: Reader, schema: RootSchema): Doc throws CodlValidationError | CodlParseError =
+    val tokenizer = Tokenizer(reader)
+    val stream = tokenizer.stream()
+    
+    val initPrefix = stream.takeWhile(_.whitespace).lastOption match
+      case Some(Tokenizer.Token.Padding(count, _)) => count
+      case _                                       => 0
+    
+    @tailrec
+    def lines(stream: LazyList[Tokenizer.Token], blanks: Int, acc: LazyList[Line], lastLevel: Int,
+                  multiline: Boolean): List[Line] =
+      stream match
+        case Tokenizer.Token.Newline(_) #:: tail =>
+          lines(tail, blanks + 1, acc, lastLevel, multiline)
+        
+        case LazyList() =>
+          acc.to(List).reverse
+        
+        case Tokenizer.Token.Word(text, pos) #:: tail =>
+          lines(Tokenizer.Token.Padding(0, pos) #:: stream, blanks, acc, lastLevel, false)
+        
+        case Tokenizer.Token.Padding(_, _) #:: Tokenizer.Token.Newline(_) #:: tail =>
+          if multiline then lines(tail, 0, Line.Multiline(t"") #:: acc, lastLevel, true)
+          else lines(tail, blanks + 1, acc, lastLevel, false)
+        
+        case Tokenizer.Token.Padding(count, _) #:: Tokenizer.Token.Word(text, _) #:: tail =>
+          if multiline && (count - initPrefix > lastLevel*2 + 4) then
+            val prefix = t" "*(count - initPrefix - lastLevel*2 - 4)
+            val content = tail.takeWhile(!_.newline).map(_.serialize).join
+            val line = Line.Multiline(prefix+text+content)
+            lines(tail.dropWhile(!_.newline), 0, line #:: acc, lastLevel, true)
+          else
+            val level = (count - initPrefix)/2
+            if (count - initPrefix)%2 == 1 then ???
+
+            val data = tail.takeWhile(!_.newline)
+            val blankLines = if blanks > 1 then LazyList(Line.Blank(blanks - 1)) else LazyList()
+            
+            if level == lastLevel + 2 then
+              val content = text+data.map(_.serialize).join
+              lines(tail.dropWhile(!_.newline), 0, Line.Multiline(content) #:: acc, lastLevel, true)
+            else if level == lastLevel + 1 then
+              lines(stream, blanks, Line.Indent #:: acc, level, false)
+            else if level > lastLevel then
+              ???
+            else if level < lastLevel then
+              lines(stream, blanks, Line.Outdent #:: acc, lastLevel - 1, false)
+            else
+              val line =
+                if text.startsWith(t"#") then Line.Comment(text.drop(1)+data.map(_.serialize).join)
+                else Line.Dataline(text, data.to(List))
+              
+              lines(tail.dropWhile(!_.newline), 0, line #:: blankLines #::: acc, level, false)
+
+    @tailrec
+    def trees(stream: List[Line], stack: List[List[UntypedNode]], comments: List[Text]): List[UntypedNode] =
+      stream match
+        case Nil => stack match
+          case head :: Nil => head.reverse
+          case stack       => trees(List(Line.Outdent), stack, Nil)
+        
+        case Line.Indent :: rest => stack match
+          case head :: tail => trees(rest, Nil :: head :: tail, Nil)
+        
+        case Line.Outdent :: rest => stack match
+          case head :: (UntypedNode.Data(key, data, longLines, _, comment) :: neck) :: tail =>
+            trees(rest, (UntypedNode.Data(key, data, longLines, head.reverse, comment) :: neck) :: tail, Nil)
+        
+        case Line.Dataline(key, data) :: rest => stack match
+          case head :: tail =>
+            trees(rest, (UntypedNode.Data(key, data, Nil, Nil, comments.reverse) :: head) :: tail, Nil)
+        
+        case Line.Blank(count) :: rest => stack match
+          case head :: tail =>
+            trees(rest, (UntypedNode.Blank(count, comments.reverse) :: head) :: tail, Nil)
+        
+        case Line.Multiline(text) :: rest => stack match
+          case (UntypedNode.Data(key, data, longLines, children, comment) :: tail1) :: tail2 =>
+            trees(rest, (UntypedNode.Data(key, data, text :: longLines, children, comment) :: tail1) :: tail2, Nil)
+          case _ =>
+            ???
+        
+        case Line.Comment(comment) :: rest =>
+            trees(rest, stack, comment :: comments)
+      
+
+    def validate(schema: Schema, data: List[UntypedNode]): List[Point] = data.map:
+      case UntypedNode.Data(key, args, longLines, children, comment) =>
+        val subschema = schema(key)
+        val cParams = args.dropWhile(_ != t"#").drop(1)
+        val lineComment = if cParams.isEmpty then None else Some(cParams.map(_.serialize).join)
+        val (last, parameters) = params(args, schema.subschemas, Nil, false)
+        
+        val content = if longLines.isEmpty then None else Some:
+          last match
+            case None       => ???
+            case Some(last) => Value(last.key, 0, longLines.reverse.join(t"\n"))
+
+        Node(key, parameters, lineComment, content, validate(subschema, children), comment)
+
+      case UntypedNode.Blank(count, comments) => Gap(comments, count)
+
+    @tailrec
+    def params(todo: List[Tokenizer.Token], schemas: List[Subschema], values: List[Value], opt: Boolean): (Option[Subschema], List[Value]) =
+      todo match
+        case Nil | Tokenizer.Token.Padding(_, _) :: Nil =>
+          schemas.headOption -> values
+        
+        case Tokenizer.Token.Padding(gap, _) :: Tokenizer.Token.Word(word, _) :: stillTodo => schemas match
+          case Nil =>
+            ???
+          
+          case subschema :: schemasTodo => subschema.multiplicity match
+            case Multiplicity.One | Multiplicity.Unique =>
+              if opt then
+                ???
+              
+              params(stillTodo, schemasTodo, Value(subschema.key, gap, word) :: values, opt = false)
+            
+            case Multiplicity.Joined =>
+              val content = word+stillTodo.map(_.serialize).join
+              params(Nil, Nil, Value(subschema.key, gap, content) :: values, opt = opt)
+            
+            case Multiplicity.Optional =>
+              params(stillTodo, schemasTodo, Value(subschema.key, gap, word) :: values, opt = true)
+            
+            case Multiplicity.Many | Multiplicity.AtLeastOne =>
+              params(stillTodo, schemas, Value(subschema.key, gap, word) :: values, opt = opt)
+
+    val result = lines(stream.dropWhile(_.whitespace), 0, LazyList(), 0, false)
+    Doc(schema, validate(schema, trees(result, List(Nil), Nil)))

@@ -38,7 +38,7 @@
 	      "type": "fat-jar",
         "main": "codl.Tests"
       },
-      "exec": {
+      "xec": {
         "browsers": [],
         "start": "codl.Tests"
       }
