@@ -64,7 +64,7 @@ object Tests extends Suite(t"CoDL tests"):
           Newline(12), Newline(13), Padding(1, 14), Newline(15), Word(t"peer", 16)))
       
     suite(t"Parsing tests"):
-      import UntypedNode.*
+      import Line.*
       test(t"Parse smallest document"):
         Codl.parse(t"""root""".s.stripMargin.show).children
       .oldAssert(_ == List(Node(t"root")))
@@ -90,8 +90,12 @@ object Tests extends Suite(t"CoDL tests"):
       .oldAssert(_ == List(Node(t"one", Nil, None, None, List(Node(t"child", Nil, None, None, List(Node(t"grandchild"))))), Node(t"two")))
       
       test(t"Single node with comment"):
-        Codl.parse(t"#comment\none".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"one", Nil, None, None, Nil, List(t"comment"))))
+        Codl.parse(t"#xyz\none".s.stripMargin.show).children
+      .oldAssert(_ == List(Node(t"one", Nil, None, None, Nil, List(t"xyz"))))
+      
+      test(t"Single node with comment and blank line in between"):
+        Codl.parse(t"#xyz\n\none".s.stripMargin.show).children
+      .oldAssert(_ == List(Gap(List(t"xyz"), 1), Node(t"one", Nil, None, None, Nil, Nil)))
       
       test(t"Single node with 'long' one-word param"):
         Codl.parse(t"root\n    param".s.stripMargin.show).children
@@ -150,11 +154,11 @@ object Tests extends Suite(t"CoDL tests"):
       .oldAssert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 1, t"param")), None, None, List(Node(t"child", comments = List(t"some comment"))))))
       
 
-      test(t"Parse simple tree and get root"):
-        Codl.parse(t"""|root
-                       |  child
-                       |""".s.stripMargin.show).children.head.key
-      .oldAssert(_ == t"root")
+      // test(t"Parse simple tree and get root"):
+      //   Codl.parse(t"""|root
+      //                  |  child
+      //                  |""".s.stripMargin.show).children.head
+      // .oldAssert(_ == t"root")
       
     //   test(t"Parse simple tree and get child"):
     //     Codl.parse(t"""|root
