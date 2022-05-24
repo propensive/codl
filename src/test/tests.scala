@@ -153,12 +153,11 @@ object Tests extends Suite(t"CoDL tests"):
         Codl.parse(t"root param\n  #some comment\n  child".s.stripMargin.show).children
       .oldAssert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 1, t"param")), None, None, List(Node(t"child", comments = List(t"some comment"))))))
       
-
-      // test(t"Parse simple tree and get root"):
-      //   Codl.parse(t"""|root
-      //                  |  child
-      //                  |""".s.stripMargin.show).children.head
-      // .oldAssert(_ == t"root")
+      test(t"Parse simple tree and get root"):
+        Codl.parse(t"""|root
+                       |  child
+                       |""".s.stripMargin.show).children.head
+      .oldAssert(_ == t"root")
       
     //   test(t"Parse simple tree and get child"):
     //     Codl.parse(t"""|root

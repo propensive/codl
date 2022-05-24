@@ -336,29 +336,28 @@ class Tokenizer(private val in: Reader):
     cur = Character(in.read())
     pos += 1
 
-  def stream(): LazyList[Tokenizer.Token] =
-    @tailrec
-    def readSpaces(count: Int = 0): Int = if cur != ' ' then count else
+  @tailrec
+  private def readSpaces(count: Int = 0): Int = if cur != ' ' then count else
+    read()
+    readSpaces(count + 1)
+
+
+  @tailrec
+  private def readWord(): Text =
+    if cur == ' ' || cur == Character.End || cur == '\n' then buf.toString.show else
+      buf.append(cur.char)
       read()
-      readSpaces(count + 1)
-
-
-    @tailrec
-    def readWord(): Text =
-      if cur == ' ' || cur == Character.End || cur == '\n' then buf.toString.show else
-        buf.append(cur.char)
-        read()
-        readWord()
+      readWord()
     
-    cur match
-      case Character.End => LazyList()
-      case '\n'          => read()
-                            Tokenizer.Token.Newline(pos - 1) #:: stream()
-      case ' '           => val count = readSpaces()
-                            Tokenizer.Token.Padding(count, pos - count) #:: stream()
-      case other         => buf.clear()
-                            val word = readWord()
-                            Tokenizer.Token.Word(word, pos - word.length) #:: stream()
+  def stream(): LazyList[Tokenizer.Token] = cur match
+    case Character.End => LazyList()
+    case '\n'          => read()
+                          Tokenizer.Token.Newline(pos - 1) #:: stream()
+    case ' '           => val count = readSpaces()
+                          Tokenizer.Token.Padding(count, pos - count) #:: stream()
+    case other         => buf.clear()
+                          val word = readWord()
+                          Tokenizer.Token.Word(word, pos - word.length) #:: stream()
 
 case class Doc(schema: RootSchema, children: List[Point])
 trait Point:
@@ -397,62 +396,63 @@ object Codl:
       case _                                       => 0
     
     @tailrec
-    def trees(stream: LazyList[Tokenizer.Token], focus: List[UntypedNode],
-                  stack: List[List[UntypedNode]], comments: List[Text], blanks: Int,
-                  multiline: Boolean, lastLevel: Int): List[UntypedNode] = stream match
-      case LazyList() => if stack.isEmpty then focus.reverse else stack match
-        case (UntypedNode.Data(key, data, longLines, _, comment) :: neck) :: tail =>
-          val node = UntypedNode.Data(key, data, longLines, focus.reverse, comment)
-          trees(stream, node :: neck, tail, Nil, blanks, false, 0)
-      
-      case Tokenizer.Token.Word(_, pos) #:: rest =>
-        val padding = Tokenizer.Token.Padding(0, pos)
-        trees(padding #:: stream, focus, stack, comments, blanks, false, lastLevel)
-      
-      case Tokenizer.Token.Newline(_) #:: rest =>
-        trees(rest, focus, stack, comments, blanks + 1, multiline, lastLevel)
-      
-      case Tokenizer.Token.Padding(_, _) #:: Tokenizer.Token.Newline(_) #:: rest =>
-        val newBlanks = if multiline then 0 else blanks + 1
-        trees(rest, focus, stack, comments, newBlanks, multiline, lastLevel)
-      
-      case Tokenizer.Token.Padding(count, _) #:: Tokenizer.Token.Word(key, _) #:: rest =>
-        if blanks > 1 then
-          trees(stream, UntypedNode.Blank(blanks - 1, comments) :: focus, stack, Nil, 0, false, lastLevel)
-        else
-          lazy val data = rest.takeWhile(!_.newline).to(List)
-          lazy val line = key+data.map(_.serialize).join
-          lazy val surplus = rest.drop(data.length)
-          
-          def appendLine(text: Text) = focus match
-            case UntypedNode.Data(key, args, longLines, children, comment) :: tail =>
-              UntypedNode.Data(key, args, text :: longLines, children, comment) :: tail
-          
-          if multiline && (count - initPrefix > lastLevel*2 + 4) then
-            val prefix = t" "*(count - initPrefix - lastLevel*2 - 4)
-            trees(surplus, appendLine(prefix+line), stack, comments, 0, true, lastLevel)
+    def trees(stream: LazyList[Tokenizer.Token], last: Int, focus: List[UntypedNode],
+                  stack: List[List[UntypedNode]], comments: List[Text] = Nil, blanks: Int = 0,
+                  multiline: Boolean = false): List[UntypedNode] =
+      stream match
+        case LazyList() => if stack.isEmpty then focus.reverse else stack match
+          case (UntypedNode.Data(key, data, longLines, _, comment) :: neck) :: tail =>
+            val node = UntypedNode.Data(key, data, longLines, focus.reverse, comment)
+            trees(stream, 0, node :: neck, tail, Nil, blanks)
+        
+        case Tokenizer.Token.Word(_, pos) #:: rest =>
+          val padding = Tokenizer.Token.Padding(0, pos)
+          trees(padding #:: stream, last, focus, stack, comments, blanks)
+        
+        case Tokenizer.Token.Newline(_) #:: rest =>
+          trees(rest, last, focus, stack, comments, blanks + 1, multiline)
+        
+        case Tokenizer.Token.Padding(_, _) #:: Tokenizer.Token.Newline(_) #:: rest =>
+          val newBlanks = if multiline then 0 else blanks + 1
+          trees(rest, last, focus, stack, comments, newBlanks, multiline)
+        
+        case Tokenizer.Token.Padding(count, _) #:: Tokenizer.Token.Word(key, _) #:: rest =>
+          if blanks > 1 then
+            trees(stream, last, UntypedNode.Blank(blanks - 1, comments) :: focus, stack)
           else
-            val level = (count - initPrefix)/2
-            if (count - initPrefix)%2 == 1 then ???
+            lazy val data = rest.takeWhile(!_.newline).to(List)
+            lazy val line = key+data.map(_.serialize).join
+            lazy val surplus = rest.drop(data.length)
             
-            (level - lastLevel) match
-              case 2 => trees(surplus, appendLine(line), stack, comments, 0, true, lastLevel)
-              case 1 => trees(stream, Nil, focus :: stack, Nil, blanks, false, level)
+            def appendLine(text: Text) = focus match
+              case UntypedNode.Data(key, args, longLines, children, comment) :: tail =>
+                UntypedNode.Data(key, args, text :: longLines, children, comment) :: tail
+            
+            if multiline && (count - initPrefix > last*2 + 4) then
+              val prefix = t" "*(count - initPrefix - last*2 - 4)
+              trees(surplus, last, appendLine(prefix+line), stack, comments, 0, true)
+            else
+              val level = (count - initPrefix)/2
+              if (count - initPrefix)%2 == 1 then ???
               
-              case 0 => key.head match
-                case '#' => trees(surplus, focus, stack, line.drop(1) :: comments, 0, false, lastLevel)
+              (level - last) match
+                case 2 => trees(surplus, last, appendLine(line), stack, comments, 0, true)
+                case 1 => trees(stream, level, Nil, focus :: stack, Nil, blanks)
                 
-                case _ =>
-                  val node = UntypedNode.Data(key, data, Nil, Nil, comments.reverse)
-                  trees(surplus, node :: focus, stack, Nil, 0, false, level)
-              
-              case n if n > 2 =>
-                ???
-              
-              case n if n < 0 => stack match
-                case (UntypedNode.Data(key, data, longLines, _, comment) :: neck) :: tail =>
-                  val node = UntypedNode.Data(key, data, longLines, focus.reverse, comment)
-                  trees(stream, node :: neck, tail, Nil, blanks, multiline, lastLevel - 1)
+                case 0 => key.head match
+                  case '#' => trees(surplus, last, focus, stack, line.drop(1) :: comments)
+                  
+                  case _ =>
+                    val node = UntypedNode.Data(key, data, Nil, Nil, comments.reverse)
+                    trees(surplus, level, node :: focus, stack)
+                
+                case n if n > 2 =>
+                  ???
+                
+                case n if n < 0 => stack match
+                  case (UntypedNode.Data(key, data, longLines, _, comment) :: neck) :: tail =>
+                    val node = UntypedNode.Data(key, data, longLines, focus.reverse, comment)
+                    trees(stream, last - 1, node :: neck, tail, Nil, blanks, multiline)
         
     def validate(schema: Schema, data: List[UntypedNode]): List[Point] = data.map:
       case UntypedNode.Data(key, args, longLines, children, comment) =>
@@ -497,4 +497,4 @@ object Codl:
             case Multiplicity.Many | Multiplicity.AtLeastOne =>
               params(stillTodo, schemas, Value(subschema.key, gap, word) :: values, opt = opt)
 
-    Doc(schema, validate(schema, trees(stream.dropWhile(_.whitespace), Nil, Nil, Nil, 0, false, 0)))
+    Doc(schema, validate(schema, trees(stream.dropWhile(_.whitespace), 0, Nil, Nil)))
