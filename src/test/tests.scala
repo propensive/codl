@@ -22,169 +22,170 @@ object Tests extends Suite(t"CoDL tests"):
 
       test(t"Parse word"):
         parseText(t"root")
-      .oldAssert(_ == List(Word(t"root", 0)))
+      .assert(_ == List(Word(t"root", 0)))
       
       test(t"Parse two words with single space"):
         parseText(t"alpha beta")
-      .oldAssert(_ == List(Word(t"alpha", 0), Padding(1, 5), Word(t"beta", 6)))
+      .assert(_ == List(Word(t"alpha", 0), Padding(1, 5), Word(t"beta", 6)))
       
       test(t"Parse two words with trailing spaces"):
         parseText(t"alpha beta   ")
-      .oldAssert(_ == List(Word(t"alpha", 0), Padding(1, 5), Word(t"beta", 6), Padding(3, 10)))
+      .assert(_ == List(Word(t"alpha", 0), Padding(1, 5), Word(t"beta", 6), Padding(3, 10)))
       
       test(t"Parse two words with three spaces"):
         parseText(t"alpha   beta")
-      .oldAssert(_ == List(Word(t"alpha", 0), Padding(3, 5), Word(t"beta", 8)))
+      .assert(_ == List(Word(t"alpha", 0), Padding(3, 5), Word(t"beta", 8)))
       
       test(t"Parse two words with newline"):
         parseText(t"alpha beta\n")
-      .oldAssert(_ == List(Word(t"alpha", 0), Padding(1, 5), Word(t"beta", 6), Newline(10)))
+      .assert(_ == List(Word(t"alpha", 0), Padding(1, 5), Word(t"beta", 6), Newline(10)))
 
       test(t"Parse two words with two lines"):
         parseText(t"alpha\nbeta")
-      .oldAssert(_ == List(Word(t"alpha", 0), Newline(5), Word(t"beta", 6)))
+      .assert(_ == List(Word(t"alpha", 0), Newline(5), Word(t"beta", 6)))
 
       test(t"Parse two words on two lines with indentation"):
         parseText(t"alpha\n  beta")
-      .oldAssert(_ == List(Word(t"alpha", 0), Newline(5), Padding(2, 6), Word(t"beta", 8)))
+      .assert(_ == List(Word(t"alpha", 0), Newline(5), Padding(2, 6), Word(t"beta", 8)))
 
       test(t"Parse two words on two lines with initial indentation"):
         parseText(t" alpha\n  beta")
-      .oldAssert(_ == List(Padding(1, 0), Word(t"alpha", 1), Newline(6), Padding(2, 7),
+      .assert(_ == List(Padding(1, 0), Word(t"alpha", 1), Newline(6), Padding(2, 7),
           Word(t"beta", 9)))
       
       test(t"Parse two words on two lines with initial newline"):
         parseText(t"\nalpha\n  beta")
-      .oldAssert(_ == List(Newline(0), Word(t"alpha", 1), Newline(6), Padding(2, 7),
+      .assert(_ == List(Newline(0), Word(t"alpha", 1), Newline(6), Padding(2, 7),
           Word(t"beta", 9)))
       
       test(t"Parse text with whitespace on blank lines"):
         parseText(t"root\n    two\n\n \npeer")
-      .oldAssert(_ == List(Word(t"root", 0), Newline(4), Padding(4, 5), Word(t"two", 9),
+      .assert(_ == List(Word(t"root", 0), Newline(4), Padding(4, 5), Word(t"two", 9),
           Newline(12), Newline(13), Padding(1, 14), Newline(15), Word(t"peer", 16)))
       
     suite(t"Parsing tests"):
       import Line.*
       test(t"Parse smallest document"):
         Codl.parse(t"""root""".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root")))
+      .assert(_ == List(Node(t"root")))
       
       test(t"Parse top-level peers"):
         Codl.parse(t"root\nnext".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root"), Node(t"next")))
+      .assert(_ == List(Node(t"root"), Node(t"next")))
       
       test(t"Parse root and one child"):
         Codl.parse(t"root\n  child".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, None, List(Node(t"child")))))
+      .assert(_ == List(Node(t"root", Nil, None, None, List(Node(t"child")))))
       
       test(t"Parse root and two children"):
         Codl.parse(t"root\n  child1\n  child2".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, None, List(Node(t"child1"), Node(t"child2")))))
+      .assert(_ == List(Node(t"root", Nil, None, None, List(Node(t"child1"), Node(t"child2")))))
       
       test(t"Parse root and two children with outdent"):
         Codl.parse(t"root\n  child1\n  child2\ntoplevel".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, None, List(Node(t"child1"), Node(t"child2"))), Node(t"toplevel")))
+      .assert(_ == List(Node(t"root", Nil, None, None, List(Node(t"child1"), Node(t"child2"))), Node(t"toplevel")))
 
       test(t"Parse root with double outdent"):
         Codl.parse(t"one\n  child\n    grandchild\ntwo".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"one", Nil, None, None, List(Node(t"child", Nil, None, None, List(Node(t"grandchild"))))), Node(t"two")))
+      .assert(_ == List(Node(t"one", Nil, None, None, List(Node(t"child", Nil, None, None, List(Node(t"grandchild"))))), Node(t"two")))
       
       test(t"Single node with comment"):
         Codl.parse(t"#xyz\none".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"one", Nil, None, None, Nil, List(t"xyz"))))
+      .assert(_ == List(Node(t"one", Nil, None, None, Nil, List(t"xyz"))))
       
       test(t"Single node with comment and blank line in between"):
         Codl.parse(t"#xyz\n\none".s.stripMargin.show).children
-      .oldAssert(_ == List(Gap(List(t"xyz"), 1), Node(t"one", Nil, None, None, Nil, Nil)))
+      .assert(_ == List(Gap(List(t"xyz"), 1), Node(t"one", Nil, None, None, Nil, Nil)))
       
       test(t"Single node with 'long' one-word param"):
         Codl.parse(t"root\n    param".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"param")))))
+      .assert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"param")))))
       
       test(t"Single node with long multi-word param"):
         Codl.parse(t"root\n    The quick brown fox".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"The quick brown fox")))))
+      .assert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"The quick brown fox")))))
       
       test(t"Single node with long multi-line param"):
         Codl.parse(t"root\n    The quick brown fox\n    jumps over the lazy dog.".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"The quick brown fox\njumps over the lazy dog.")))))
+      .assert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"The quick brown fox\njumps over the lazy dog.")))))
       
       test(t"Single node with multiline-param and indentation"):
         Codl.parse(t"root\n    The quick brown fox\n     jumps over the lazy dog.".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"The quick brown fox\n jumps over the lazy dog.")))))
+      .assert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"The quick brown fox\n jumps over the lazy dog.")))))
       
       test(t"Single node with multiline-param then child"):
         Codl.parse(t"root\n    two\n    lines\n  child".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"two\nlines")), List(Node(t"child")))))
+      .assert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"two\nlines")), List(Node(t"child")))))
     
       test(t"Single node with multiline-param then peer"):
         Codl.parse(t"root\n    two\n    lines\npeer".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"two\nlines"))), Node(t"peer")))
+      .assert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"two\nlines"))), Node(t"peer")))
       
       test(t"Single node with multiline-param then blank line, then peer"):
         Codl.parse(t"root\n    two\n    lines\n\npeer".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"two\nlines"))), Gap(Nil, 1), Node(t"peer")))
+      .assert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"two\nlines"))), Gap(Nil, 1), Node(t"peer")))
       
       test(t"Single node with multiline-param then two blank lines, then peer"):
         Codl.parse(t"root\n    two\n    lines\n\n\npeer".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"two\nlines"))), Gap(Nil, 2), Node(t"peer")))
+      .assert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"two\nlines"))), Gap(Nil, 2), Node(t"peer")))
       
       test(t"Single node with multiline-param then two blank lines with surplus whitespace, then peer"):
         Codl.parse(t"root\n    two\n    lines\n\n\npeer".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"two\nlines"))), Gap(Nil, 2), Node(t"peer")))
+      .assert(_ == List(Node(t"root", Nil, None, Some(Value(SpecialKey.UntypedNode, 0, t"two\nlines"))), Gap(Nil, 2), Node(t"peer")))
 
       test(t"Single node with param"):
         Codl.parse(t"root param".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 1, t"param")))))
+      .assert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 1, t"param")))))
       
       test(t"Single node with param and extra padding"):
         Codl.parse(t"root  param".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 2, t"param")))))
+      .assert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 2, t"param")))))
       
       test(t"Single node with param and child"):
         Codl.parse(t"root param\n  child".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 1, t"param")), None, None, List(Node(t"child")))))
+      .assert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 1, t"param")), None, None, List(Node(t"child")))))
       
       test(t"Single node with param and child with comment"):
         Codl.parse(t"root param\n  #comment\n  child".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 1, t"param")), None, None, List(Node(t"child", comments = List(t"comment"))))))
+      .assert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 1, t"param")), None, None, List(Node(t"child", comments = List(t"comment"))))))
       
       test(t"Single node with param and child with multiword comment"):
         Codl.parse(t"root param\n  #some comment\n  child".s.stripMargin.show).children
-      .oldAssert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 1, t"param")), None, None, List(Node(t"child", comments = List(t"some comment"))))))
+      .assert(_ == List(Node(t"root", List(Value(SpecialKey.UntypedNode, 1, t"param")), None, None, List(Node(t"child", comments = List(t"some comment"))))))
       
       test(t"Parse simple tree and get root"):
         Codl.parse(t"""|root
                        |  child
                        |""".s.stripMargin.show).children.head
-      .oldAssert(_ == t"root")
+      .matches:
+        case Node(t"root", _, _, _, _, _) =>
       
     //   test(t"Parse simple tree and get child"):
     //     Codl.parse(t"""|root
     //                    |  child
     //                    |""".s.stripMargin.show).children.head.children.head()
-    //   .oldAssert(_ == t"child")
+    //   .assert(_ == t"child")
       
     //   test(t"Parse more deeply-nested child"):
     //     Codl.parse(t"""|root
     //                    |  child
     //                    |    node
     //                    |""".s.stripMargin.show).children.head.children.head.children.head()
-    //   .oldAssert(_ == t"node")
+    //   .assert(_ == t"node")
       
     //   test(t"Allow prefix on first line"):
     //     Codl.parse(t"""|  root
     //                    |    child
     //                    |      node
     //                    |""".s.stripMargin.show).children.head.children.head.children.head()
-    //   .oldAssert(_ == t"node")
+    //   .assert(_ == t"node")
       
     //   test(t"Allow odd prefix on first line"):
     //     Codl.parse(t"""|   root
     //                    |     child
     //                    |       node
     //                    |""".s.stripMargin.show).children.head.children.head.children.head()
-    //   .oldAssert(_ == t"node")
+    //   .assert(_ == t"node")
 
     //   test(t"Only one space of indentation fails"):
     //     capture:
@@ -208,78 +209,81 @@ object Tests extends Suite(t"CoDL tests"):
     //                   root
     //                     child
     //                     """).children.head.children.head()
-    //   .oldAssert(_ == t"child")
+    //   .assert(_ == t"child")
       
     //   test(t"Last line does not need to be terminated"):
     //     Codl.parse(t"root")
-    //   .oldAssert(_.children.length == 1)
+    //   .assert(_.children.length == 1)
       
     //   test(t"Comment is not a node"):
     //     Codl.parse(t"""
     //       #comment
     //       root
     //       """)
-    //   .oldAssert(_.children.length == 1)
+    //   .assert(_.children.length == 1)
       
-    //   test(t"Comment may be child"):
-    //     Codl.parse(t"""
-    //       node1
-    //         #comment
-    //       node2
-    //       """)
-    //   .oldAssert(_.children.length == 2)
+      test(t"Comment may be child"):
+        println(t"Comment may be child")
+        Codl.parse(t"""
+          node1
+            #comment
+          node2
+          """)
+      .assert(_.children.length == 2)
       
-    //   test(t"Empty string is empty document"):
-    //     Codl.parse(t"")
-    //   .oldAssert(_.children.length == 0)
+      test(t"Empty string is empty document"):
+        println(t"Empty string is empty document")
+        Codl.parse(t"")
+      .assert(_.children.length == 0)
 
-    //   test(t"Document starts with comment"):
-    //     Codl.parse(t"""|#comment
-    //                     |root
-    //                     |""".s.stripMargin.show)
-    //   .oldAssert(_.children.length == 1)
+      test(t"Document starts with comment"):
+        Codl.parse(t"""|#comment
+                       |root
+                       |""".s.stripMargin.show)
+      .assert(_.children.length == 1)
       
-    //   test(t"Unindent after comment forbidden"):
-    //     capture:
-    //       Codl.parse(t"""|  #comment
-    //                       |root
-    //                       |""".s.stripMargin.show)
-    //   .matches:
-    //     case CodlParseError(12, CodlParseError.Indentation.Insufficient) =>
+      test(t"Unindent after comment forbidden"):
+        println("Unindent test")
+        capture:
+          Codl.parse(t"""|  #comment
+                         |root
+                         |""".s.stripMargin.show)
+      .matches:
+        case AggregateError(List(CodlParseError(12, InsufficientIndent))) =>
       
-    //   test(t"root node with params"):
-    //     Codl.parse(t"root param1 param2").children.head.params.length
-    //   .oldAssert(_ == 2)
+      test(t"root node with params"):
+        Codl.parse(t"root param1 param2").children.head.params.length
+      .assert(_ == 2)
       
-    //   test(t"root node with children counts params correctly"):
-    //     Codl.parse(t"""
-    //       root param1 param2
-    //         child1
-    //         child2
-    //     """).children.head.params
-    //   .oldAssert(_.length == 2)
+      // test(t"root node with children counts params correctly"):
+      //   Codl.parse(t"""
+      //     root param1 param2
+      //       child1
+      //       child2
+      //   """).children.head.params
+      // .assert(_.length == 2)
       
-    //   test(t"root node with params counts children correctly"):
-    //     Codl.parse(t"""
-    //       root param1 param2
-    //         child1
-    //         child2
-    //     """).children.head.children
-    //   .oldAssert(_.length == 2)
+      // test(t"root node with params counts children correctly"):
+      //   Codl.parse(t"""
+      //     root param1 param2
+      //       child1
+      //       child2
+      //   """).children.head.children
+      // .assert(_.length == 2)
       
     //   test(t"child node with param"):
     //     Codl.parse(t"""
     //       root param1 param2
     //         child1 param1
     //     """).children.head.children.head.params
-    //   .oldAssert(_.length == 1)
+    //   .assert(_.length == 1)
       
     //   test(t"child node with param and trailing comment"):
     //     Codl.parse(t"""
     //       root param1 param2
     //         child1 param1 # line comment
     //     """).children.head.children.head.params
-    //   .oldAssert(_.length == 1)
+    //   .assert(_.length == 1)
       
     //   test(t"misaligned comments"):
     //     capture:
@@ -289,7 +293,7 @@ object Tests extends Suite(t"CoDL tests"):
     //             # comment 2
     //             child1
     //       """)
-    //   .oldAssert(_ == CodlParseError(66, CodlParseError.Indentation.AfterComment))
+    //   .assert(_ == CodlParseError(66, CodlParseError.Indentation.AfterComment))
       
     //   test(t"comment not aligned with associated child"):
     //     capture:
@@ -298,7 +302,7 @@ object Tests extends Suite(t"CoDL tests"):
     //           # comment 1
     //             child1
     //       """)
-    //   .oldAssert(_ == CodlParseError(66, CodlParseError.Indentation.AfterComment))
+    //   .assert(_ == CodlParseError(66, CodlParseError.Indentation.AfterComment))
       
     //   test(t"unindent on comment permitted"):
     //     Codl.parse(t"""
@@ -307,7 +311,7 @@ object Tests extends Suite(t"CoDL tests"):
     //           grandchild1
     //         # unindented comment
     //     """)
-    //   .oldAssert { _ => true }
+    //   .assert { _ => true }
 
     //   test(t"single unindent"):
     //     Codl.parse(t"""|root
@@ -315,7 +319,7 @@ object Tests extends Suite(t"CoDL tests"):
     //                     |    grandchild1
     //                     |  child2
     //                     |""".s.stripMargin.show).children.head.children(1)()
-    //   .oldAssert(_ == t"child2")
+    //   .assert(_ == t"child2")
       
     //   test(t"double unindent"):
     //     Codl.parse(t"""|root
@@ -323,7 +327,7 @@ object Tests extends Suite(t"CoDL tests"):
     //                     |    grandchild
     //                     |root2
     //                     |""".s.stripMargin.show).children(1)()
-    //   .oldAssert(_ == t"root2")
+    //   .assert(_ == t"root2")
 
     //   test(t"indented param"):
     //     Codl.parse(t"""
@@ -331,7 +335,7 @@ object Tests extends Suite(t"CoDL tests"):
     //           Long text
     //         child
     //     """).children.head.params.head.value
-    //   .oldAssert(_ == t"Long text")
+    //   .assert(_ == t"Long text")
       
     //   test(t"multiline param"):
     //     Codl.parse(t"""
@@ -340,7 +344,7 @@ object Tests extends Suite(t"CoDL tests"):
     //           Line 2
     //         child
     //     """).children.head.params.head.value
-    //   .oldAssert(_ == t"Line 1\nLine 2")
+    //   .assert(_ == t"Line 1\nLine 2")
       
     //   test(t"multiline param allows uneven indentation"):
     //     Codl.parse(t"""
@@ -349,21 +353,21 @@ object Tests extends Suite(t"CoDL tests"):
     //            Line 2
     //         child
     //     """).children.head.params.head.value
-    //   .oldAssert(_ == t"Line 1\n Line 2")
+    //   .assert(_ == t"Line 1\n Line 2")
       
     //   test(t"indented param can be last thing in doc"):
     //     Codl.parse(t"""
     //       root
     //           Long text
     //     """).children.head.params.head.value
-    //   .oldAssert(_ == t"Long text")
+    //   .assert(_ == t"Long text")
       
     //   test(t"multiline param includes trailing spaces"):
     //     Codl.parse(t"""
     //       root
     //           Long text   
     //     """).children.head.params.head.value
-    //   .oldAssert(_ == t"Long text   ")
+    //   .assert(_ == t"Long text   ")
       
     //   test(t"multiline param excludes trailing newline"):
     //     Codl.parse(t"""
@@ -371,21 +375,21 @@ object Tests extends Suite(t"CoDL tests"):
     //           Long text
 
     //     """).children.head.params.head.value
-    //   .oldAssert(_ == t"Long text")
+    //   .assert(_ == t"Long text")
       
     //   test(t"multiline param is not a comment"):
     //     Codl.parse(t"""
     //       root
     //           # Long text
     //     """).children.head.params.head.value
-    //   .oldAssert(_ == t"# Long text")
+    //   .assert(_ == t"# Long text")
       
     //   test(t"trailing comment is not a param"):
     //     Codl.parse(t"""
     //       root
     //         child abc # comment
     //     """).children.head.children.head.params
-    //   .oldAssert(_.length == 1)
+    //   .assert(_.length == 1)
       
     //   test(t"trailing comment is accessible"):
     //     Codl.parse(t"""
@@ -401,7 +405,7 @@ object Tests extends Suite(t"CoDL tests"):
     //         # message
     //         child abc
     //     """).children.head.children.head.comment
-    //   .oldAssert(_ == Some(t" message"))
+    //   .assert(_ == Some(t" message"))
       
     //   test(t"leading comment is two lines long"):
     //     Codl.parse(t"""
@@ -410,7 +414,7 @@ object Tests extends Suite(t"CoDL tests"):
     //         # line 2
     //         child abc
     //     """).children.head.children.head.comment
-    //   .oldAssert(_ == Some(t" line 1\n line 2"))
+    //   .assert(_ == Some(t" line 1\n line 2"))
       
     //   test(t"blank line separates comments"):
     //     Codl.parse(t"""
@@ -420,7 +424,7 @@ object Tests extends Suite(t"CoDL tests"):
     //         # line 2
     //         child abc
     //     """).children.head.children(1).comment
-    //   .oldAssert(_ == Some(t" line 2"))
+    //   .assert(_ == Some(t" line 2"))
       
     //   test(t"standalone comment is accessible"):
     //     Codl.parse(t"""
@@ -430,7 +434,7 @@ object Tests extends Suite(t"CoDL tests"):
     //         # line 2
     //         child abc
     //     """).children.head.children.head.comment
-    //   .oldAssert(_ == Some(t" line 1"))
+    //   .assert(_ == Some(t" line 1"))
       
     //   test(t"blank lines are counted"):
     //     Codl.parse(t"""
@@ -458,7 +462,7 @@ object Tests extends Suite(t"CoDL tests"):
     //         item
     //           value
     //     """))
-    //   .oldAssert(_ => true)
+    //   .assert(_ => true)
       
     //   test(t"Schema doesn't contain child"):
     //     capture:
@@ -562,7 +566,7 @@ object Tests extends Suite(t"CoDL tests"):
     //     """))
         
     //     validDoc.bin
-    //   .oldAssert(_ == t"""±ÀÚ!  "   ! "   ! ! #abc""")
+    //   .assert(_ == t"""±ÀÚ!  "   ! "   ! ! #abc""")
 
     // suite(t"Serialization tests"):
 
@@ -577,40 +581,40 @@ object Tests extends Suite(t"CoDL tests"):
     //     compare(basicSchema, t"""|root
     //                              |  item
     //                              |""".s.stripMargin.show)
-    //   .oldAssert(_ == _)
+    //   .assert(_ == _)
       
     //   test(t"Simple node with parameter"):
     //     compare(basicSchema, t"""|root
     //                              |  item
     //                              |    element argument
     //                              |""".s.stripMargin.show)
-    //   .oldAssert(_ == _)
+    //   .assert(_ == _)
       
     //   test(t"Simple node with indentation"):
     //     compare(basicSchema, t"""|   root
     //                              |     item
     //                              |       element value
     //                              |""".s.stripMargin.show)
-    //   .oldAssert(_ == _)
+    //   .assert(_ == _)
       
     //   test(t"Simple node with padded parameter"):
     //     compare(basicSchema, t"""|root
     //                              |  item
     //                              |    element   argument
     //                              |""".s.stripMargin.show)
-    //   .oldAssert(_ == _)
+    //   .assert(_ == _)
       
     //   test(t"Simple node with trailing comment"):
     //     compare(basicSchema, t"""|root
     //                              |  item # comment
     //                              |""".s.stripMargin.show)
-    //   .oldAssert(_ == _)
+    //   .assert(_ == _)
       
     //   test(t"Simple node with trailing comment and extra space"):
     //     compare(basicSchema, t"""|root
     //                              |  item    # comment
     //                              |""".s.stripMargin.show)
-    //   .oldAssert(_ == _)
+    //   .assert(_ == _)
 
     //   test(t"Simple node with long parameter"):
     //     compare(basicSchema, t"""|root
@@ -618,7 +622,7 @@ object Tests extends Suite(t"CoDL tests"):
     //                              |    element
     //                              |        This is some text.
     //                              |""".s.stripMargin.show)
-    //   .oldAssert(_ == _)
+    //   .assert(_ == _)
 
     //   test(t"Simple node with inital comment"):
     //     compare(basicSchema, t"""|#!/bin/bash
@@ -627,7 +631,7 @@ object Tests extends Suite(t"CoDL tests"):
     //                              |    element
     //                              |        This is some text.
     //                              |""".s.stripMargin.show)
-    //   .oldAssert(_ == _)
+    //   .assert(_ == _)
 
     //   test(t"Simple node with blank lines"):
     //     compare(basicSchema, t"""|root
@@ -636,7 +640,7 @@ object Tests extends Suite(t"CoDL tests"):
     //                              |    element
     //                              |        This is some text.
     //                              |""".s.stripMargin.show)
-    //   .oldAssert(_ == _)
+    //   .assert(_ == _)
       
     //   test(t"Serialize more complex structure"):
     //     compare(basicSchema, t"""|root
@@ -647,7 +651,7 @@ object Tests extends Suite(t"CoDL tests"):
     //                              |    option xyz
     //                              |  child
     //                              |""".s.stripMargin.show)
-    //   .oldAssert(_ == _)
+    //   .assert(_ == _)
 
     // case class Person(name: Text, age: Int)
     // case class Organisation(name: Text, ceo: Person)
@@ -674,26 +678,26 @@ object Tests extends Suite(t"CoDL tests"):
 
     // //   test(t"serialize a simple case class"):
     // //     Person(t"John", 65).codl.show
-    // //   .oldAssert(_ == t"""|name John
+    // //   .assert(_ == t"""|name John
     // //                       |age 65
     // //                       |""".s.stripMargin.show)
       
     // //   test(t"serialize a case class with long string"):
     // //     Person(t"John Smith", 65).codl.show
-    // //   .oldAssert(_ == t"""|name
+    // //   .assert(_ == t"""|name
     // //                       |    John Smith
     // //                       |age 65
     // //                       |""".s.stripMargin.show)
       
     // //   test(t"serialize a nested case class"):
     // //     Organisation(t"Acme", Person(t"John", 65)).codl.show
-    // //   .oldAssert(_ == t"""|name Acme
+    // //   .assert(_ == t"""|name Acme
     // //                       |ceo John 65
     // //                       |""".s.stripMargin.show)
 
     // //   test(t"serialize a nested case class and long strings"):
     // //     Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl.show
-    // //   .oldAssert(_ == t"""|name
+    // //   .assert(_ == t"""|name
     // //                       |    Acme Inc
     // //                       |ceo
     // //                       |  name
@@ -706,4 +710,4 @@ object Tests extends Suite(t"CoDL tests"):
     // //     val codl = Person(t"John Smith", 65).codl
     // //     Log.info(codl.show)
     // //     Codl.parse(codl.show).as[Person]
-    // //   .oldAssert(_ == Person(t"John Smith", 64))
+    // //   .assert(_ == Person(t"John Smith", 64))
