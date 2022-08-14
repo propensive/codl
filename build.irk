@@ -33,12 +33,12 @@
       "sources": ["src/test"],
       "version": "0.4.0",
       "docs": ["doc"],
-      "artifact": {
+      "xartifact": {
         "path": "tests.jar",
 	      "type": "fat-jar",
         "main": "codl.Tests"
       },
-      "xec": {
+      "exec": {
         "browsers": [],
         "start": "codl.Tests"
       }

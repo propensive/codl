@@ -5,15 +5,17 @@ import gossamer.*
 import rudiments.*
 import turbulence.*
 import eucalyptus.*
+import tetromino.*
+import parasitism.*
 
 import java.io.StringReader
-
-given Log(Everything |-> SystemOut)
 
 import unsafeExceptions.canThrowAny
 
 object Tests extends Suite(t"CoDL tests"):
-  def run(using Runner): Unit =
+  def run(using Runner): Unit = supervise(t"main"):
+    import logging.silent
+
     suite(t"Tokenizer tests"):
       import Tokenizer.Token, Token.*
 
@@ -62,6 +64,12 @@ object Tests extends Suite(t"CoDL tests"):
         parseText(t"root\n    two\n\n \npeer")
       .assert(_ == List(Word(t"root", 0), Newline(4), Padding(4, 5), Word(t"two", 9),
           Newline(12), Newline(13), Padding(1, 14), Newline(15), Word(t"peer", 16)))
+        
+      test(t"Parse initial comment"):
+        parseText(t"""|#!/bin/bash
+                      |root
+                      |""".s.stripMargin.show)
+      .assert(_ == List(Word(t"#!/bin/bash", 0), Newline(11), Word(t"root", 12), Newline(16)))
       
     suite(t"Parsing tests"):
       import Line.*
@@ -160,67 +168,72 @@ object Tests extends Suite(t"CoDL tests"):
       .matches:
         case Node(t"root", _, _, _, _, _) =>
       
-    //   test(t"Parse simple tree and get child"):
-    //     Codl.parse(t"""|root
-    //                    |  child
-    //                    |""".s.stripMargin.show).children.head.children.head()
-    //   .assert(_ == t"child")
+      test(t"Parse simple tree and get child"):
+        Codl.parse(t"""|root
+                       |  child
+                       |""".s.stripMargin.show).children.head.children.head
+      .matches:
+        case Node(t"child", _, _, _, _, _) =>
       
-    //   test(t"Parse more deeply-nested child"):
-    //     Codl.parse(t"""|root
-    //                    |  child
-    //                    |    node
-    //                    |""".s.stripMargin.show).children.head.children.head.children.head()
-    //   .assert(_ == t"node")
+      test(t"Parse more deeply-nested child"):
+        Codl.parse(t"""|root
+                       |  child
+                       |    node
+                       |""".s.stripMargin.show).children.head.children.head.children.head
+      .matches:
+        case Node(t"node", _, _, _, _, _) =>
       
-    //   test(t"Allow prefix on first line"):
-    //     Codl.parse(t"""|  root
-    //                    |    child
-    //                    |      node
-    //                    |""".s.stripMargin.show).children.head.children.head.children.head()
-    //   .assert(_ == t"node")
+      test(t"Allow prefix on first line"):
+        Codl.parse(t"""|  root
+                       |    child
+                       |      node
+                       |""".s.stripMargin.show).children.head.children.head.children.head
+      .matches:
+        case Node(t"node", _, _, _, _, _) =>
       
-    //   test(t"Allow odd prefix on first line"):
-    //     Codl.parse(t"""|   root
-    //                    |     child
-    //                    |       node
-    //                    |""".s.stripMargin.show).children.head.children.head.children.head()
-    //   .assert(_ == t"node")
+      test(t"Allow odd prefix on first line"):
+        Codl.parse(t"""|   root
+                       |     child
+                       |       node
+                       |""".s.stripMargin.show).children.head.children.head.children.head
+      .matches:
+        case Node(t"node", _, _, _, _, _) =>
 
-    //   test(t"Only one space of indentation fails"):
-    //     capture:
-    //       Codl.parse(t"""|root
-    //                      | child
-    //                      |""".s.stripMargin.show)
-    //   .matches:
-    //     case CodlParseError(6, CodlParseError.Indentation.Uneven) =>
+      test(t"Only one space of indentation fails"):
+        capture:
+          Codl.parse(t"""|root
+                         | child
+                         |""".s.stripMargin.show)
+      .matches:
+        case AggregateError(List(CodlParseError(6, UnevenIndent(_, _)))) =>
       
-    //   test(t"Indentation less than initial prefix is an error"):
-    //     capture:
-    //       Codl.parse(t"""|    root
-    //                       |      child
-    //                       |   broken
-    //                       |""".s.stripMargin.show)
-    //   .matches:
-    //     case CodlParseError(24, CodlParseError.Indentation.Insufficient) =>
+      test(t"Indentation less than initial prefix is an error"):
+        capture:
+          Codl.parse(t"""|    root
+                         |      child
+                         |  broken
+                         |""".s.stripMargin.show)
+      .matches:
+        case AggregateError(List(CodlParseError(23, InsufficientIndent))) =>
 
-    //   test(t"Initial prefix can be after newline"):
-    //     Codl.parse(t"""
-    //                   root
-    //                     child
-    //                     """).children.head.children.head()
-    //   .assert(_ == t"child")
+      test(t"Initial prefix can be after newline"):
+        Codl.parse(t"""
+                      root
+                        child
+                        """).children.head.children.head
+      .matches:
+        case Node(t"child", _, _, _, _, _) =>
       
-    //   test(t"Last line does not need to be terminated"):
-    //     Codl.parse(t"root")
-    //   .assert(_.children.length == 1)
+      test(t"Last line does not need to be terminated"):
+        Codl.parse(t"root")
+      .assert(_.children.length == 1)
       
-    //   test(t"Comment is not a node"):
-    //     Codl.parse(t"""
-    //       #comment
-    //       root
-    //       """)
-    //   .assert(_.children.length == 1)
+      test(t"Comment is not a node"):
+        Codl.parse(t"""
+          #comment
+          root
+          """)
+      .assert(_.children.length == 1)
       
       test(t"Comment may be child"):
         println(t"Comment may be child")
@@ -237,8 +250,8 @@ object Tests extends Suite(t"CoDL tests"):
       .assert(_.children.length == 0)
 
       test(t"Document starts with comment"):
-        Codl.parse(t"""|#comment
-                       |root
+        Codl.parse(t"""|#!/bin/bash
+                       |roots
                        |""".s.stripMargin.show)
       .assert(_.children.length == 1)
       
@@ -249,202 +262,218 @@ object Tests extends Suite(t"CoDL tests"):
                          |root
                          |""".s.stripMargin.show)
       .matches:
-        case AggregateError(List(CodlParseError(12, InsufficientIndent))) =>
+        case AggregateError(List(CodlParseError(11, InsufficientIndent))) =>
       
       test(t"root node with params"):
         Codl.parse(t"root param1 param2").children.head.params.length
       .assert(_ == 2)
       
-      // test(t"root node with children counts params correctly"):
-      //   Codl.parse(t"""
-      //     root param1 param2
-      //       child1
-      //       child2
-      //   """).children.head.params
-      // .assert(_.length == 2)
+      test(t"root node with children counts params correctly"):
+        Codl.parse(t"""
+          root param1 param2
+            child1
+            child2
+        """).children.head.params
+      .assert(_.length == 2)
       
-      // test(t"root node with params counts children correctly"):
-      //   Codl.parse(t"""
-      //     root param1 param2
-      //       child1
-      //       child2
-      //   """).children.head.children
-      // .assert(_.length == 2)
+      test(t"root node with params counts children correctly"):
+        Codl.parse(t"""
+          root param1 param2
+            child1
+            child2
+        """).children.head.children
+      .assert(_.length == 2)
       
-    //   test(t"child node with param"):
-    //     Codl.parse(t"""
-    //       root param1 param2
-    //         child1 param1
-    //     """).children.head.children.head.params
-    //   .assert(_.length == 1)
+      test(t"child node with param"):
+        Codl.parse(t"""
+          root param1 param2
+            child1 param1
+        """).children.head.children.head.params
+      .assert(_.length == 1)
       
-    //   test(t"child node with param and trailing comment"):
-    //     Codl.parse(t"""
-    //       root param1 param2
-    //         child1 param1 # line comment
-    //     """).children.head.children.head.params
-    //   .assert(_.length == 1)
+      test(t"child node with param and trailing comment"):
+        Codl.parse(t"""
+          root param1 param2
+            child1 param1 # line comment
+        """).children.head.children.head.params
+      .assert(_.length == 1)
       
-    //   test(t"misaligned comments"):
-    //     capture:
-    //       Codl.parse(t"""
-    //         root param
-    //           # comment 1
-    //             # comment 2
-    //             child1
-    //       """)
-    //   .assert(_ == CodlParseError(66, CodlParseError.Indentation.AfterComment))
+      test(t"misaligned comments"):
+        capture:
+          Codl.parse(t"""
+            root param
+              # comment 1
+                # comment 2
+                child1
+          """)
+      .assert(_ == AggregateError(List(CodlParseError(66, IndentAfterComment))))
       
-    //   test(t"comment not aligned with associated child"):
-    //     capture:
-    //       Codl.parse(t"""
-    //         root param
-    //           # comment 1
-    //             child1
-    //       """)
-    //   .assert(_ == CodlParseError(66, CodlParseError.Indentation.AfterComment))
+      test(t"comment not aligned with associated child"):
+        capture:
+          Codl.parse(t"""
+            root param
+              # comment 1
+                child1
+          """)
+      .assert(_ == AggregateError(List(CodlParseError(66, IndentAfterComment))))
       
-    //   test(t"unindent on comment permitted"):
-    //     Codl.parse(t"""
-    //       root param
-    //         child1
-    //           grandchild1
-    //         # unindented comment
-    //     """)
-    //   .assert { _ => true }
+      test(t"unindent on comment permitted"):
+        Codl.parse(t"""
+          root param
+            child1
+              grandchild1
+            # unindented comment
+        """)
+      .assert { _ => true }
 
-    //   test(t"single unindent"):
-    //     Codl.parse(t"""|root
-    //                     |  child1
-    //                     |    grandchild1
-    //                     |  child2
-    //                     |""".s.stripMargin.show).children.head.children(1)()
-    //   .assert(_ == t"child2")
+      test(t"single unindent"):
+        Codl.parse(t"""|root
+                       |  child1
+                       |    grandchild1
+                       |  child2
+                       |""".s.stripMargin.show).children.head.children(1)
+      .matches:
+        case Node(t"child2", _, _, _, _, _) =>
       
-    //   test(t"double unindent"):
-    //     Codl.parse(t"""|root
-    //                     |  child
-    //                     |    grandchild
-    //                     |root2
-    //                     |""".s.stripMargin.show).children(1)()
-    //   .assert(_ == t"root2")
+      test(t"double unindent"):
+        Codl.parse(t"""|root
+                       |  child
+                       |    grandchild
+                       |root2
+                       |""".s.stripMargin.show).children(1)
+      .matches:
+        case Node(t"root2", _, _, _, _, _) =>
 
-    //   test(t"indented param"):
-    //     Codl.parse(t"""
-    //       root
-    //           Long text
-    //         child
-    //     """).children.head.params.head.value
-    //   .assert(_ == t"Long text")
+      test(t"indented param"):
+        Codl.parse(t"""
+          root
+              Long text
+            child
+        """).children.head.asInstanceOf[Node].content.get.value
+      .assert(_ == t"Long text")
       
-    //   test(t"multiline param"):
-    //     Codl.parse(t"""
-    //       root
-    //           Line 1
-    //           Line 2
-    //         child
-    //     """).children.head.params.head.value
-    //   .assert(_ == t"Line 1\nLine 2")
+      test(t"multiline param"):
+        Codl.parse(t"""
+          root
+              Line 1
+              Line 2
+            child
+        """).children.head.asInstanceOf[Node].content.get.value
+      .assert(_ == t"Line 1\nLine 2")
       
-    //   test(t"multiline param allows uneven indentation"):
-    //     Codl.parse(t"""
-    //       root
-    //           Line 1
-    //            Line 2
-    //         child
-    //     """).children.head.params.head.value
-    //   .assert(_ == t"Line 1\n Line 2")
+      test(t"multiline param allows uneven indentation"):
+        Codl.parse(t"""
+          root
+              Line 1
+               Line 2
+            child
+        """).children.head.asInstanceOf[Node].content.get.value
+      .assert(_ == t"Line 1\n Line 2")
       
-    //   test(t"indented param can be last thing in doc"):
-    //     Codl.parse(t"""
-    //       root
-    //           Long text
-    //     """).children.head.params.head.value
-    //   .assert(_ == t"Long text")
+      test(t"indented param can be last thing in doc"):
+        Codl.parse(t"""
+          root
+              Long text
+        """).children.head.asInstanceOf[Node].content.get.value
+      .assert(_ == t"Long text")
       
-    //   test(t"multiline param includes trailing spaces"):
-    //     Codl.parse(t"""
-    //       root
-    //           Long text   
-    //     """).children.head.params.head.value
-    //   .assert(_ == t"Long text   ")
+      test(t"multiline param includes trailing spaces"):
+        Codl.parse(t"""
+          root
+              Long text   
+        """).children.head.asInstanceOf[Node].content.get.value
+      .assert(_ == t"Long text   ")
       
-    //   test(t"multiline param excludes trailing newline"):
-    //     Codl.parse(t"""
-    //       root
-    //           Long text
+      test(t"multiline param excludes trailing newline"):
+        Codl.parse(t"""
+          root
+              Long text
 
-    //     """).children.head.params.head.value
-    //   .assert(_ == t"Long text")
+        """).children.head.asInstanceOf[Node].content.get.value
+      .assert(_ == t"Long text")
       
-    //   test(t"multiline param is not a comment"):
-    //     Codl.parse(t"""
-    //       root
-    //           # Long text
-    //     """).children.head.params.head.value
-    //   .assert(_ == t"# Long text")
+      test(t"multiline param is not a comment"):
+        Codl.parse(t"""
+          root
+              # Long text
+        """).children.head.asInstanceOf[Node].content.get.value
+      .assert(_ == t"# Long text")
       
-    //   test(t"trailing comment is not a param"):
-    //     Codl.parse(t"""
-    //       root
-    //         child abc # comment
-    //     """).children.head.children.head.params
-    //   .assert(_.length == 1)
+      test(t"trailing comment is not a param"):
+        Codl.parse(t"""
+          root
+            child abc # comment
+        """).children.head.children.head.params
+      .assert(_.length == 1)
       
-    //   test(t"trailing comment is accessible"):
-    //     Codl.parse(t"""
-    //       root
-    //         child abc # comment
-    //     """).children.head.children.head
-    //   .matches:
-    //     case Node.Data(_, _, _, Some(t"comment"), _) =>
+      test(t"trailing comment is accessible"):
+        Codl.parse(t"""
+          root
+            child abc # comment
+        """).children.head.children.head
+      .matches:
+        case Node(_, _, Some(t"comment"), _, _, _) =>
       
-    //   test(t"leading comment is accessible"):
-    //     Codl.parse(t"""
-    //       root
-    //         # message
-    //         child abc
-    //     """).children.head.children.head.comment
-    //   .assert(_ == Some(t" message"))
+      test(t"leading comment is accessible"):
+        Codl.parse(t"""
+          root
+            # message
+            child abc
+        """).children.head.children.head
+      .matches:
+        case Node(_, _, _, _, _, List(t" message")) =>
       
-    //   test(t"leading comment is two lines long"):
-    //     Codl.parse(t"""
-    //       root
-    //         # line 1
-    //         # line 2
-    //         child abc
-    //     """).children.head.children.head.comment
-    //   .assert(_ == Some(t" line 1\n line 2"))
+      test(t"leading comment is two lines long"):
+        Codl.parse(t"""
+          root
+            # line 1
+            # line 2
+            child abc
+        """).children.head.children.head
+      .matches:
+        case Node(_, _, _, _, _, List(t" line 1", t" line 2")) =>
       
-    //   test(t"blank line separates comments"):
-    //     Codl.parse(t"""
-    //       root
-    //         # line 1
+      test(t"blank line separates comments"):
+        Codl.parse(t"""
+          root
+            # line 1
 
-    //         # line 2
-    //         child abc
-    //     """).children.head.children(1).comment
-    //   .assert(_ == Some(t" line 2"))
+            # line 2
+            child abc
+        """).children.head.children(1)
+      .matches:
+        case Node(_, _, _, _, _, List(t" line 2")) =>
       
-    //   test(t"standalone comment is accessible"):
-    //     Codl.parse(t"""
-    //       root
-    //         # line 1
+      test(t"standalone comment is accessible"):
+        Codl.parse(t"""
+          root
+            # line 1
 
-    //         # line 2
-    //         child abc
-    //     """).children.head.children.head.comment
-    //   .assert(_ == Some(t" line 1"))
+            # line 2
+            child abc
+        """).children.head.children.head
+      .matches:
+        case Gap(List(t" line 1"), 1) =>
       
-    //   test(t"blank lines are counted"):
-    //     Codl.parse(t"""
-    //       root
+      test(t"blank lines between peers are counted"):
+        Codl.parse(t"""
+          root
 
 
-    //         child abc
-    //     """).children.head.children.head
-    //   .matches:
-    //     case Node.Blank(_, 2, _) =>
+          peer abc
+        """).children(1)
+      .matches:
+        case Gap(Nil, 2) =>
+      
+      test(t"blank lines are counted"):
+        Codl.parse(t"""
+          root
+
+
+            child abc
+        """).children.head.children.head
+      .matches:
+        case Gap(_, 2) =>
 
     // suite(t"Schema tests"):
 

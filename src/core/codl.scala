@@ -290,12 +290,16 @@ object Tokenizer:
     def newline: Boolean = this match
       case Newline(_) => true
       case _          => false
+    
+    override def toString: String = this match
+      case Word(text, _)     => s"[$text]"
+      case Padding(count, _) => (t"·"*count).s
+      case Newline(_)        => "¶"
   
 class Tokenizer(private val in: Reader):
   private var pos: Int = 0
   private val buf: StringBuilder = StringBuilder()
   private var cur: Character = Character(in.read())
-  private var spaces: Int = 0
 
   private inline def read(): Unit =
     cur = Character(in.read())
@@ -328,13 +332,16 @@ case class Doc(schema: RootSchema, children: List[Point])
 trait Point:
   def children: List[Point]
   def params: List[Value]
+  def apply(): Text | SpecialKey
 
 trait Data extends Point:
   def key: Text | SpecialKey
+  def apply(): Text | SpecialKey = key
 
 case class Gap(comments: List[Text], lines: Int) extends Point:
   def children: List[Point] = Nil
   def params: List[Value] = Nil
+  def apply(): Text | SpecialKey = t""
 
 case class Node(key: Text | SpecialKey, params: List[Value] = Nil, lineComment: Option[Text] = None,
                       content: Option[Value] = None, children: List[Point] = Nil,
@@ -355,12 +362,13 @@ enum Tweak:
   case HalfIndent, HalfOutdent
 
 object Codl:
-  def parse(text: Text): Doc throws AggregateError =
+  def parse(text: Text)(using Log): Doc throws AggregateError =
     parse(StringReader(text.s), RootSchema.Freeform)
 
-  def parse(reader: Reader, schema: RootSchema): Doc throws AggregateError = attempt:
+  def parse(reader: Reader, schema: RootSchema)(using Log): Doc throws AggregateError = attempt:
     val tokenizer = Tokenizer(reader)
     val stream = tokenizer.stream()
+    Log.info(s"Stream = ${stream.toList}")
     
     val initPrefix = stream.takeWhile(_.whitespace).lastOption match
       case Some(Tokenizer.Token.Padding(count, _)) => count
@@ -375,33 +383,44 @@ object Codl:
     def trees(stream: LazyList[Tokenizer.Token], last: Int, focus: List[UntypedNode],
                   stack: List[List[UntypedNode]], comments: List[Text] = Nil, blanks: Int = 0,
                   multiline: Boolean = false): List[UntypedNode] =
+      Log.fine(s"trees(${stream.toList.mkString}, $last, $focus, $stack, $comments, $blanks, $multiline)")
       stream match
-        case LazyList() => if stack.isEmpty then focus.reverse else stack match
-          case (UntypedNode.Data(key, data, longLines, _, comment) :: neck) :: tail =>
-            val node = UntypedNode.Data(key, data, longLines, focus.reverse, comment)
-            trees(stream, 0, node :: neck, tail, Nil, blanks)
+        case LazyList() | LazyList(Tokenizer.Token.Padding(_, _)) =>
+          Log.fine(t"—— end")
+          if stack.isEmpty then focus.reverse else stack match
+            case (UntypedNode.Data(key, data, longLines, _, comment) :: neck) :: tail =>
+              val node = UntypedNode.Data(key, data, longLines, focus.reverse, comment)
+              trees(stream, 0, node :: neck, tail, Nil, blanks)
+            case (blank :: UntypedNode.Data(key, data, longLines, _, comment) :: neck) :: tail =>
+              val node = UntypedNode.Data(key, data, longLines, blank :: focus.reverse, comment)
+              trees(stream, 0, node :: neck, tail, Nil, blanks)
         
         case Tokenizer.Token.Word(_, pos) #:: rest =>
-          val padding = Tokenizer.Token.Padding(0, pos)
-          trees(padding #:: stream, last, focus, stack, comments, blanks)
+          Log.fine(t"—— prepad")
+          trees(Tokenizer.Token.Padding(0, pos) #:: stream, last, focus, stack, comments, blanks)
         
         case Tokenizer.Token.Newline(_) #:: rest =>
+          Log.fine(t"—— newline")
           trees(rest, last, focus, stack, comments, blanks + 1, multiline)
         
         case Tokenizer.Token.Padding(_, _) #:: Tokenizer.Token.Newline(_) #:: rest =>
+          Log.fine(t"—— blank")
           val newBlanks = if multiline then 0 else blanks + 1
           trees(rest, last, focus, stack, comments, newBlanks, multiline)
         
-        case Tokenizer.Token.Padding(_, count) #:: Tokenizer.Token.Word(key, pos) #:: rest =>
-          println(stream)
+        case Tokenizer.Token.Padding(count, _) #:: Tokenizer.Token.Word(key, pos) #:: rest =>
+          Log.fine(t"—— word")
           if blanks > 1 then
+            Log.fine(t"  —— blanks")
             trees(stream, last, UntypedNode.Blank(blanks - 1, comments) :: focus, stack)
           else
             lazy val data = rest.takeWhile(!_.newline).to(List)
             lazy val line = key+data.map(_.serialize).join
             lazy val surplus = rest.drop(data.length)
             
-            def appendLine(text: Text) = focus match
+            def appendLine(text: Text): List[UntypedNode] = focus match
+              case Nil =>
+                raise(CodlParseError(pos, SurplusIndent)).recover(Nil)
               case UntypedNode.Data(key, args, longLines, children, comment) :: tail =>
                 UntypedNode.Data(key, args, text :: longLines, children, comment) :: tail
             
@@ -414,46 +433,60 @@ object Codl:
               //     case _ => ()
              
               val level =
-                if (count - initPrefix)%2 == 0 then (count - initPrefix)/2
-                else raise:
+                if (count - initPrefix)%2 == 0 then (count - initPrefix)/2 else raise:
                   CodlParseError(pos, UnevenIndent(initPrefix, count))
                 .fix(Tweak.HalfOutdent, Tweak.HalfIndent):
                   case Tweak.HalfOutdent => (count - initPrefix)/2
                   case Tweak.HalfIndent  => (count - initPrefix)/2 + 1
-              println(s"initPrefix = $initPrefix, count = $count, level = $level, last = $last")
+              
               (level - last) match
-                case 2 => trees(surplus, last, appendLine(line), stack, comments, 0, true)
-                case 1 => trees(stream, level, Nil, focus :: stack, Nil, blanks)
+                case 2 =>
+                  Log.fine(t"  —— content")
+                  trees(surplus, last, appendLine(line), stack, comments, 0, true)
                 
-                case 0 => key.head match
-                  case '#' => trees(surplus, last, focus, stack, line.drop(1) :: comments)
+                case 1 =>
+                  Log.fine(t"  —— child")
+                  if !comments.isEmpty then raise(CodlParseError(pos, IndentAfterComment)).recover(Nil)
+                  else trees(stream, level, Nil, focus :: stack, Nil, blanks)
+                
+                case 0 =>
+                  Log.fine(t"  —— peer")
+                  key.head match
+                    case '#' =>
+                      trees(surplus, last, focus, stack, line.drop(1) :: comments)
                   
-                  case _ =>
-                    val node = UntypedNode.Data(key, data, Nil, Nil, comments.reverse)
-                    trees(surplus, level, node :: focus, stack)
+                    case _ =>
+                      val node = UntypedNode.Data(key, data, Nil, Nil, comments.reverse)
+                      trees(surplus, level, node :: focus, stack)
                 
                 case n if n > 2 =>
+                  Log.fine(t"  —— excess")
                   raise(CodlParseError(pos, SurplusIndent)).recover:
                     indirectTrees(surplus, last, appendLine(line), stack, comments, 0, true)
                 
-                case n if n < 0 => stack match
-                  case (UntypedNode.Data(key, data, longLines, _, comment) :: neck) :: tail =>
-                    val node = UntypedNode.Data(key, data, longLines, focus.reverse, comment)
-                    trees(stream, last - 1, node :: neck, tail, Nil, blanks, multiline)
-                  
-                  case Nil =>
-                    raise(CodlParseError(pos, InsufficientIndent)).recover:
-                      indirectTrees(stream, last - 1, focus, stack, Nil, blanks, multiline)
-                  
+                case n =>
+                  Log.fine(t"  —— outdent")
+                  stack match
+                    case (UntypedNode.Data(key, data, longLines, _, comment) :: neck) :: tail =>
+                      val node = UntypedNode.Data(key, data, longLines, focus.reverse, comment)
+                      trees(stream, last - 1, node :: neck, tail, Nil, blanks, multiline)
+                    
+                    case Nil =>
+                      raise(CodlParseError(pos, InsufficientIndent)).recover:
+                        indirectTrees(stream, last - 1, focus, stack, Nil, blanks, multiline)
+  
+                    case _ =>
+                      throw Mistake("This should be impossible")                  
+
     def validate(schema: Schema, data: List[UntypedNode]): List[Point] =
       data.map:
         case UntypedNode.Data(key, args, longLines, children, comment) =>
           val subschema = try schema(key) catch case error: CodlValidationError =>
             raise(error).recover(RootSchema.Freeform)
 
-          val cParams = args.dropWhile(_ != t"#").drop(1)
+          val cParams = args.dropWhile(_.serialize != t"#").drop(2)
           val lineComment = if cParams.isEmpty then None else Some(cParams.map(_.serialize).join)
-          val (last, parameters) = params(args, schema.subschemas, Nil, false)
+          val (last, parameters) = params(args.takeWhile(_.serialize != t"#"), schema.subschemas, Nil, false)
           
           val content: Option[Value] = if longLines.isEmpty then None else Some:
             last match
@@ -499,24 +532,28 @@ object Codl:
             case Multiplicity.Many | Multiplicity.AtLeastOne =>
               params(stillTodo, schemas, Value(subschema.key, gap, word) :: values, opt = opt)
 
-    Doc(schema, validate(schema, trees(stream.dropWhile(_.whitespace), 0, Nil, Nil)))
+    @tailrec
+    def trimPrefix(stream: LazyList[Tokenizer.Token]): LazyList[Tokenizer.Token] = stream match
+      case Tokenizer.Token.Newline(_) #:: rest                                   => trimPrefix(rest)
+      case Tokenizer.Token.Padding(_, _) #:: Tokenizer.Token.Newline(_) #:: rest => trimPrefix(rest)
+      case other                                                                 => other
+    
+    Doc(schema, validate(schema, trees(trimPrefix(stream), 0, Nil, Nil)))
 
-sealed trait CodlError:
-  this: Error[?] =>
+sealed trait CodlError extends Exception
 
 object CodlParseError:
   enum Issue:
     case UnevenIndent(initial: Int, indent: Int)
     case IndentAfterComment, SurplusIndent, InsufficientIndent
 
-export CodlParseError.Issue.*
+export CodlParseError.Issue.{UnevenIndent, IndentAfterComment, SurplusIndent, InsufficientIndent}
 
 case class BinaryError(expectation: Text, pos: Int)
 extends Exception(s"expected $expectation at position $pos")
 
 case class CodlParseError(pos: Int, indentation: CodlParseError.Issue)
-extends Error((t"could not parse CoDL document at ", pos, t": ", indentation)), CodlError:
-  def message: Text = t"could not parse CoDL document at $pos: $indentation"
+extends Error(err"could not parse CoDL document at $pos: $indentation"), CodlError
 
 object CodlValidationError:
   enum Issue:
@@ -528,16 +565,13 @@ object CodlValidationError:
     case DuplicateId(id: Text)
 
 case class CodlValidationError(word: Text | SpecialKey, issue: CodlValidationError.Issue)
-extends Error((t"the CoDL document did not conform to the schema at ", word, t" because ", issue)),
-    CodlError:
-  def message: Text = t"the CoDL document did not conform to the schema: ${issue.show}"
+extends Error(err"the CoDL document did not conform to the schema at $word because $issue"), CodlError
 
 case class MultipleIdentifiersError(key: Text)
 extends Exception(s"multiple parameters of $key have been marked as identifiers")
 
 case class MissingValueError(key: Text)
-extends Error((t"the key ", key, t" does not exist in the CoDL document")):
-  def message: Text = t"the key $key does not exist in the CoDL document"
+extends Error(err"the key $key does not exist in the CoDL document")
 
 import CodlValidationError.Issue.*
 
@@ -548,49 +582,53 @@ case class Recovery(suppliedFixes: List[Int]):
   var alternatives: Option[Int] = None
 
 case class Raise(error: CodlError):
-  def fix[T, F](defaultFix: F, alternatives: F*)(handle: F => T)(using recovery: Recovery): T =
+  def fix[T, F](defaultFix: F, alternatives: F*)(handle: F => T)(using recovery: Recovery)(using Log): T throws AggregateError =
+    throw AggregateError(List(error))
+    /*
     recovery.failures ::= error
     val fix: F =
       if recovery.suppliedFixes.length > recovery.failures.size
       then
-        println("Applying alternative")
+        Log.fine("Applying alternative")
         alternatives(recovery.suppliedFixes(recovery.failures.size))
       else
         if recovery.suppliedFixes.length == recovery.failures.size
         then
-          println(t"Setting alternatives size")
+          Log.fine(t"Setting alternatives size")
           recovery.alternatives = Some(alternatives.size)
 
         defaultFix
     
     recovery.appliedFixes ::= alternatives.indexOf(fix)
-    handle(fix)
+    handle(fix)*/
   
-  def recover[T](value: T)(using Recovery): T = fix(())((_: Any) => value)
+  def recover[T](value: T)(using Recovery, Log): T throws AggregateError = fix(())((_: Any) => value)
 
 def raise[T, Fix](error: => CodlError) = Raise(error)
 
-def attempt[T](fn: Recovery ?=> T): T throws AggregateError =
+def attempt[T](fn: Recovery ?=> T)(using Log): T throws AggregateError =
   
   @tailrec
   def recur(recovery: Recovery): T =
+    Log.info(t"recurring")
     val result = fn(using recovery)
+    Log.info(t"Got result ${result.toString}")
     
     recovery.alternatives match
       case None =>
         if recovery.failures.length > 0 then throw AggregateError(recovery.failures)
+        Log.warn(t"Cannot recover")
         result
       case Some(n) =>
-        val bestFix = (0 to n).minBy:
-          i =>
-            val trialRecovery = Recovery(i :: recovery.fixes)
-            fn(using trialRecovery)
-            trialRecovery.failures.length
+        Log.warn(t"Found $n possible fixes")
+        val bestFix = (0 to n).minBy: index =>
+          val trialRecovery = Recovery(index :: recovery.fixes)
+          fn(using trialRecovery)
+          trialRecovery.failures.length
         
         recur(Recovery(bestFix :: recovery.suppliedFixes))
   
   recur(Recovery(Nil))
       
-
-case class AggregateError(errors: List[CodlError]) extends Exception:
-  override def toString(): String = errors.map(_.toString.show).join.s
+case class AggregateError(errors: List[CodlError])
+extends Error(err"aggregation of errors: ${errors.map(_.toString.show).join.s}")
