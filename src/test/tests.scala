@@ -13,6 +13,9 @@ import java.io.StringReader
 import unsafeExceptions.canThrowAny
 
 object Tests extends Suite(t"CoDL tests"):
+
+  given Realm(t"tests")
+
   def run(using Runner): Unit = supervise(t"main"):
     import logging.silent
 
@@ -412,7 +415,7 @@ object Tests extends Suite(t"CoDL tests"):
             child abc # comment
         """).children.head.children.head
       .matches:
-        case Node(_, _, Some(t"comment"), _, _, _) =>
+        case Node(_, _, Some(Value(_, _, t"comment")), _, _, _) =>
       
       test(t"leading comment is accessible"):
         Codl.parse(t"""
@@ -475,93 +478,94 @@ object Tests extends Suite(t"CoDL tests"):
       .matches:
         case Gap(_, 2) =>
 
-    // suite(t"Schema tests"):
+    suite(t"Schema tests"):
 
-    //   val basicSchema = Subschema.parse(Codl.parse(t"""
-    //     root
-    //       item
-    //         value?
-    //         element? param
-    //         option* id!
-    //   """))
+      val basicSchema = Subschema.parse(Codl.tokenize(StringReader(t"""
+        root
+          item
+            value?
+            element? param
+            option* id!
+          other?
+      """.s))(0))
 
-    //   test(t"Simple schema structure"):
-    //     basicSchema.validate(Codl.parse(t"""
-    //       root
-    //         item
-    //           value
-    //     """))
-    //   .assert(_ => true)
+      test(t"Simple schema structure"):
+        basicSchema.parse(t"""
+          root
+            item
+              value
+        """)
+      .assert(_ => true)
       
-    //   test(t"Schema doesn't contain child"):
-    //     capture:
-    //       basicSchema.validate(Codl.parse(t"""
-    //         root
-    //           child
-    //       """))
-    //   .matches:
-    //     case CodlValidationError(_, CodlValidationError.Issue.InvalidKey(t"child")) =>
+      test(t"Schema doesn't contain child"):
+        capture:
+          basicSchema.parse(t"""
+            root
+              child
+          """)
+      .matches:
+        case AggregateError(List(CodlValidationError(_, CodlValidationError.Issue.InvalidKey(t"child")))) =>
         
-    //   test(t"required value must be included"):
-    //     capture:
-    //       basicSchema.validate(Codl.parse(t"""
-    //         root
-    //       """))
-    //   .matches:
-    //     case CodlValidationError(_, CodlValidationError.Issue.MissingKey(t"item")) =>
+      test(t"Required value must be included"):
+        capture:
+          basicSchema.parse(t"""
+            root
+          """)
+      .matches:
+        case AggregateError(List(CodlValidationError(_, CodlValidationError.Issue.MissingKey(t"item")))) =>
         
-    //   test(t"unique value should not be duplicated"):
-    //     capture:
-    //       basicSchema.validate(Codl.parse(t"""
-    //         root
-    //           item
-    //             value
-    //             value
-    //       """))
-    //   .matches:
-    //     case CodlValidationError(_, CodlValidationError.Issue.DuplicateKey(t"value", _)) =>
+      test(t"unique value should not be duplicated"):
+        capture:
+          basicSchema.parse(t"""
+            root
+              item
+                value
+                value
+          """)
+      .matches:
+        case AggregateError(List(CodlValidationError(_, CodlValidationError.Issue.DuplicateKey(t"value", _)))) =>
       
-    //   test(t"unique value with param should not be duplicated"):
-    //     capture:
-    //       basicSchema.validate(Codl.parse(t"""
-    //         root
-    //           item
-    //             element one
-    //             element two
-    //       """))
-    //   .matches:
-    //     case CodlValidationError(_, CodlValidationError.Issue.DuplicateKey(t"element", _)) =>
+      test(t"unique value with param should not be duplicated"):
+        capture:
+          basicSchema.parse(t"""
+            root
+              item
+                element one
+                element two
+          """)
+      .matches:
+        case AggregateError(List(CodlValidationError(_, CodlValidationError.Issue.DuplicateKey(t"element", _)))) =>
 
-    //   // test(t"required param is missing"):
-    //   //   capture:
-    //   //     basicSchema.validate(Codl.parse(t"""
-    //   //       root
-    //   //         item
-    //   //           element
-    //   //     """))
-    //   // .matches:
-    //   //   case CodlValidationError(_, _, CodlValidationError.Issue.MissingParams(1)) =>
+      test(t"required param is missing"):
+        capture:
+          basicSchema.parse(t"""
+            root
+              item
+                element
+          """)
+      .matches:
+        case AggregateError(List(CodlValidationError(_, CodlValidationError.Issue.MissingKey(t"param")))) =>
 
-    //   // test(t"too many parameters"):
-    //   //   capture:
-    //   //     basicSchema.validate(Codl.parse(t"""
-    //   //       root
-    //   //         item
-    //   //           element one two
-    //   //     """))
-    //   // .matches:
-    //   //   case CodlValidationError(_, CodlValidationError.Issue.SurplusParams) =>
+      test(t"too many parameters"):
+        capture:
+          basicSchema.parse(t"""
+            root
+              item
+                element one two
+          """)
+      .matches:
+        case AggregateError(List(CodlValidationError(_, CodlValidationError.Issue.SurplusParams))) =>
       
-    //   test(t"duplicated ID"):
-    //     capture:
-    //       basicSchema.validate(Codl.parse(t"""
-    //         root
-    //           item
-    //             option one
-    //             option one
-    //       """))
-    //   .matches:
-    //     case CodlValidationError(_, CodlValidationError.Issue.DuplicateId(t"one")) =>
+      test(t"duplicated ID"):
+        capture:
+          basicSchema.parse(t"""
+            root
+              item
+                option one
+                option one
+          """)
+      .matches:
+        case AggregateError(List(CodlValidationError(_, CodlValidationError.Issue.DuplicateId(t"one")))) =>
       
     // val basicSchema = Subschema.parse(Codl.parse(t"""
     //   root
@@ -599,144 +603,145 @@ object Tests extends Suite(t"CoDL tests"):
 
     // suite(t"Serialization tests"):
 
-    //   def compare(schema: Schema, src: Text): (Text, Text) =
-    //     Log.info(t" Original: "+src.debug)
-    //     Log.info(t"Parsed: "+Codl.parse(src).show)
-    //     val result = schema.validate(Codl.parse(src)).show
-    //     Log.info(t"Processed: "+result.debug)
-    //     src.sub(t" ", t"_") -> schema.validate(Codl.parse(src)).show.sub(t" ", t"_")
+      def compare(schema: SchemaDoc, src: Text)(using Log): (Text, Text) =
+        val result: Text = schema.parse(src).show
+        src.sub(t" ", t"_") -> schema.parse(src).show.sub(t" ", t"_")
 
-    //   test(t"Simple node with child"):
-    //     compare(basicSchema, t"""|root
-    //                              |  item
-    //                              |""".s.stripMargin.show)
-    //   .assert(_ == _)
+      test(t"Simple node with child"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |""".s.stripMargin.show)
+      .assert(_ == _)
       
-    //   test(t"Simple node with parameter"):
-    //     compare(basicSchema, t"""|root
-    //                              |  item
-    //                              |    element argument
-    //                              |""".s.stripMargin.show)
-    //   .assert(_ == _)
+      test(t"Simple node with parameter"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |    element argument
+                                 |""".s.stripMargin.show)
+      .assert(_ == _)
       
-    //   test(t"Simple node with indentation"):
-    //     compare(basicSchema, t"""|   root
-    //                              |     item
-    //                              |       element value
-    //                              |""".s.stripMargin.show)
-    //   .assert(_ == _)
+      test(t"Simple node with indentation"):
+        compare(basicSchema, t"""|   root
+                                 |     item
+                                 |       element value
+                                 |""".s.stripMargin.show)
+      .assert(_ == _)
       
-    //   test(t"Simple node with padded parameter"):
-    //     compare(basicSchema, t"""|root
-    //                              |  item
-    //                              |    element   argument
-    //                              |""".s.stripMargin.show)
-    //   .assert(_ == _)
+      test(t"Simple node with padded parameter"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |    element   argument
+                                 |""".s.stripMargin.show)
+      .assert(_ == _)
       
-    //   test(t"Simple node with trailing comment"):
-    //     compare(basicSchema, t"""|root
-    //                              |  item # comment
-    //                              |""".s.stripMargin.show)
-    //   .assert(_ == _)
+      test(t"Simple node with trailing comment"):
+        compare(basicSchema, t"""|root
+                                 |  item # comment
+                                 |""".s.stripMargin.show)
+      .assert(_ == _)
       
-    //   test(t"Simple node with trailing comment and extra space"):
-    //     compare(basicSchema, t"""|root
-    //                              |  item    # comment
-    //                              |""".s.stripMargin.show)
-    //   .assert(_ == _)
+      test(t"Simple node with trailing comment and extra space"):
+        compare(basicSchema, t"""|root
+                                 |  item    # comment
+                                 |""".s.stripMargin.show)
+      .assert(_ == _)
 
-    //   test(t"Simple node with long parameter"):
-    //     compare(basicSchema, t"""|root
-    //                              |  item
-    //                              |    element
-    //                              |        This is some text.
-    //                              |""".s.stripMargin.show)
-    //   .assert(_ == _)
+      test(t"Simple node with long parameter"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |    element
+                                 |        This is some simple text.
+                                 |""".s.stripMargin.show)
+      .assert(_ == _)
 
-    //   test(t"Simple node with inital comment"):
-    //     compare(basicSchema, t"""|#!/bin/bash
-    //                              |root
-    //                              |  item
-    //                              |    element
-    //                              |        This is some text.
-    //                              |""".s.stripMargin.show)
-    //   .assert(_ == _)
+      test(t"Simple node with inital comment"):
+        import logging.stdout
+        compare(basicSchema, t"""|#!/bin/bash
+                                 |root
+                                 |  item
+                                 |    element
+                                 |        This is some text.
+                                 |""".s.stripMargin.show)
+      .assert(_ == _)
 
-    //   test(t"Simple node with blank lines"):
-    //     compare(basicSchema, t"""|root
-    //                              |  item
-    //                              |
-    //                              |    element
-    //                              |        This is some text.
-    //                              |""".s.stripMargin.show)
-    //   .assert(_ == _)
+      test(t"Simple node with blank lines"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |
+                                 |    element
+                                 |        This is some text.
+                                 |""".s.stripMargin.show)
+      .assert(_ == _)
       
-    //   test(t"Serialize more complex structure"):
-    //     compare(basicSchema, t"""|root
-    //                              |  item
-    //                              |    value
-    //                              |    # here's a comment
-    //                              |    element abc
-    //                              |    option xyz
-    //                              |  child
-    //                              |""".s.stripMargin.show)
-    //   .assert(_ == _)
+      test(t"Serialize more complex structure"):
+        compare(basicSchema, t"""|root
+                                 |  item
+                                 |    value
+                                 |    # here's a comment
+                                 |    element abc
+                                 |    option xyz
+                                 |  other
+                                 |""".s.stripMargin.show)
+      .assert(_ == _)
 
-    // case class Person(name: Text, age: Int)
-    // case class Organisation(name: Text, ceo: Person)
+    case class Person(name: Text, age: Int)
+    case class Organisation(name: Text, ceo: Person)
 
-    // suite(t"Generic Derivation tests"):
-    //   test(t"write a simple case class"):
-    //     Person(t"John Smith", 65).codl
-    //   .matches:
-    //     case CodlDoc(_, List(
-    //            Param(t"name", t"John Smith", _, _, _, _),
-    //            Param(t"age", t"65", _, _, _, _)
-    //          ), _) =>
+    suite(t"Generic Derivation tests"):
+      test(t"write a simple case class"):
+        Person(t"John Smith", 65).codl
+      .matches:
+        case Doc(_, List(
+               Node(t"name", Nil, None, Some(Value(_, 1, t"John Smith")), _, _),
+               Node(t"age", List(Value(_, 1, t"65")), _, _, _, _)
+             ), _) =>
       
-    // //   test(t"write a nested case class"):
-    // //     Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl
-    // //   .matches:
-    // //     case CodlDoc(_, List(
-    // //            Param(t"name", t"Acme Inc", _, _, _, _),
-    // //            Branch(t"ceo", _, List(
-    // //              Param(t"name", t"John Smith", _, _, _, _),
-    // //              Param(t"age", t"65", _, _, _, _)
-    // //            ), _, _)
-    // //          ), _) =>
+      test(t"write a nested case class"):
+        Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl.show
+      .assert(_ == t"""|name
+                       |    Acme Inc
+                       |ceo
+                       |  name
+                       |      John Smith
+                       |  age 65
+                       |""".s.stripMargin.show)
 
-    // //   test(t"serialize a simple case class"):
-    // //     Person(t"John", 65).codl.show
-    // //   .assert(_ == t"""|name John
-    // //                       |age 65
-    // //                       |""".s.stripMargin.show)
+      test(t"serialize a simple case class"):
+        Person(t"John", 65).codl.show
+      .assert(_ == t"""|name John
+                       |age 65
+                       |""".s.stripMargin.show)
       
-    // //   test(t"serialize a case class with long string"):
-    // //     Person(t"John Smith", 65).codl.show
-    // //   .assert(_ == t"""|name
-    // //                       |    John Smith
-    // //                       |age 65
-    // //                       |""".s.stripMargin.show)
+      test(t"serialize a case class with long string"):
+        Person(t"John Smith", 65).codl.show
+      .assert(_ == t"""|name
+                       |    John Smith
+                       |age 65
+                       |""".s.stripMargin.show)
       
-    // //   test(t"serialize a nested case class"):
-    // //     Organisation(t"Acme", Person(t"John", 65)).codl.show
-    // //   .assert(_ == t"""|name Acme
-    // //                       |ceo John 65
-    // //                       |""".s.stripMargin.show)
+      test(t"serialize a nested case class"):
+        Organisation(t"Acme", Person(t"John", 65)).codl.show
+      .assert(_ == t"""|name Acme
+                       |ceo John 65
+                       |""".s.stripMargin.show)
 
-    // //   test(t"serialize a nested case class and long strings"):
-    // //     Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl.show
-    // //   .assert(_ == t"""|name
-    // //                       |    Acme Inc
-    // //                       |ceo
-    // //                       |  name
-    // //                       |      John Smith
-    // //                       |  age 65
-    // //                       |""".s.stripMargin.show)
+      test(t"serialize a nested case class and long strings"):
+        Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl.show
+      .assert(_ == t"""|name
+                       |    Acme Inc
+                       |ceo
+                       |  name
+                       |      John Smith
+                       |  age 65
+                       |""".s.stripMargin.show)
     
-    // // suite(t"Data roundtrip tests"):
-    // //   test(t"serialize and deserialize a case class"):
-    // //     val codl = Person(t"John Smith", 65).codl
-    // //     Log.info(codl.show)
-    // //     Codl.parse(codl.show).as[Person]
-    // //   .assert(_ == Person(t"John Smith", 64))
+    suite(t"Data roundtrip tests"):
+      test(t"serialize and deserialize a case class"):
+        val codl = Person(t"John Smith", 65).codl
+        Codl.parse(codl.show).as[Person]
+      .assert(_ == Person(t"John Smith", 65))
+      
+      test(t"roundtrip a nested case class with a long strings"):
+        val org = Organisation(t"Acme Inc", Person(t"John Smith", 65))
+        Codl.parse(org.codl.show).as[Organisation]
+      .assert(_ == Organisation(t"Acme Inc", Person(t"John Smith", 65)))
