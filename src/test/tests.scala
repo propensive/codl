@@ -16,56 +16,318 @@ object Tests extends Suite(t"CoDL tests"):
 
   given Realm(t"tests")
 
+
   def run(using Runner): Unit = supervise(t"main"):
     import logging.silent
-    suite(t"Tokenizer tests"):
-      def parseText(text: Text): LazyList[Word] = Tokenizer(StringReader(text.s)).stream()
+    import Token.*
 
-      test(t"Parse word"):
-        parseText(t"root")
-      .assert(_ == LazyList(Word(t"root", Pos(0, 0))))
+    suite(t"Reader tests"):
+      def interpret(text: Text)(using Log): PositionReader = PositionReader(StringReader(text.s))
+
+      test(t"Character can store line"):
+        Character('©', 123, 456).line
+      .assert(_ == 123)
       
+      test(t"Character can store column"):
+        Character('©', 123, 456).column
+      .assert(_ == 456)
+      
+      test(t"Character can store Char"):
+        Character('©', 123, 456).char
+      .assert(_ == '©')
+      
+      test(t"Initial position is line 0"):
+        val reader = interpret(t"abc")
+        reader.next().line
+      .assert(_ == 0)
+      
+      test(t"Initial position is column 0"):
+        val reader = interpret(t"abc")
+        reader.next().column
+      .assert(_ == 0)
+      
+      test(t"Initial character is correct"):
+        val reader = interpret(t"abc")
+        reader.next().char
+      .assert(_ == 'a')
+      
+      test(t"Initial linefeed character is correct"):
+        val reader = interpret(t"\nabc")
+        reader.next().char
+      .assert(_ == '\n')
+      
+      test(t"Initial carriage return and linefeed gives linefeed"):
+        val reader = interpret(t"\r\nabc")
+        reader.next().char
+      .assert(_ == '\n')
+      
+      test(t"Character following CR/LF is correct"):
+        val reader = interpret(t"\r\nabc")
+        reader.next()
+        reader.next().char
+      .assert(_ == 'a')
+      
+      test(t"Read a character gives column 1"):
+        val reader = interpret(t"abc")
+        reader.next()
+        reader.next().column
+      .assert(_ == 1)
+      
+      test(t"Read a character gives correct line"):
+        val reader = interpret(t"abc")
+        reader.next()
+        reader.next().line
+      .assert(_ == 0)
+      
+      test(t"Character after newline gives correct line"):
+        val reader = interpret(t"\nabc")
+        reader.next()
+        reader.next().line
+      .assert(_ == 1)
+      
+      test(t"Character after newline gives correct column"):
+        val reader = interpret(t"\nabc")
+        reader.next()
+        reader.next().column
+      .assert(_ == 0)
+      
+      test(t"Read a CR/LF character gives correct line"):
+        val reader = interpret(t"\r\nabc")
+        reader.next()
+        reader.next().line
+      .assert(_ == 1)
+      
+      test(t"character after CR/LF gives correct column"):
+        val reader = interpret(t"\r\nabc")
+        reader.next()
+        reader.next().column
+      .assert(_ == 0)
+      
+      test(t"after LF next newline does not fail"):
+        val reader = interpret(t"a\nbc\n")
+        for i <- 0 until 4 do reader.next()
+        reader.next().char
+      .assert(_ == '\n')
+      
+      test(t"after LF next newline must not include CR"):
+        val reader = interpret(t"a\nbc\r\n")
+        for i <- 0 until 4 do reader.next()
+        capture(reader.next().char)
+      .matches:
+        case CodlParseError(_, _, CodlParseError.Issue.CarriageReturnMismatch(false)) =>
+      
+      test(t"after CR/LF next CR/LF does not fail"):
+        val reader = interpret(t"a\r\nbc\r\n")
+        for i <- 0 until 4 do reader.next()
+        reader.next().char
+      .assert(_ == '\n')
+      
+      test(t"after CR/LF next newline must include CR"):
+        val reader = interpret(t"a\r\nbc\n")
+        for i <- 0 until 4 do reader.next()
+        capture(reader.next().char)
+      .matches:
+        case CodlParseError(_, _, CodlParseError.Issue.CarriageReturnMismatch(true)) =>
+      
+      test(t"can capture start of text"):
+        val reader = interpret(t"abcdef")
+        reader.put(reader.next())
+        reader.put(reader.next())
+        reader.put(reader.next())
+        reader.get()
+      .assert(_ == t"abc")
+      
+      test(t"capture is empty after get"):
+        val reader = interpret(t"abcdef")
+        for i <- 0 until 3 do reader.put(reader.next())
+        reader.get()
+        for i <- 0 until 3 do reader.put(reader.next())
+        reader.get()
+      .assert(_ == t"def")
+      
+      test(t"capture position is correct"):
+        val reader = interpret(t"abcdef")
+        for i <- 0 until 3 do reader.put(reader.next())
+        reader.get()
+        for i <- 0 until 3 do reader.put(reader.next())
+        reader.get()
+      .assert(_ == t"def")
+
+      test(t"read end character"):
+        val reader = interpret(t"")
+        reader.next()
+      .matches:
+        case Character.End =>
+      
+      test(t"cannot read end twice"):
+        val reader = interpret(t"")
+        reader.next()
+        capture(reader.next())
+      .matches:
+        case _: IllegalStateException =>
+
+    suite(t"Tokenizer tests"):
+      def parseText(text: Text)(using Log): CodlStream = tokenize(StringReader(text.s))
+
       test(t"Parse two words with single space"):
         parseText(t"alpha beta")
-      .assert(_ == LazyList(Word(t"alpha", Pos(0, 0)), Word(t"beta", Pos(0, 6))))
+      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Word(t"beta", 0, 6))))
       
+
       test(t"Parse two words with trailing spaces"):
         parseText(t"alpha beta   ")
-      .assert(_ == LazyList(Word(t"alpha", Pos(0, 0)), Word(t"beta", Pos(0, 6))))
+      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Word(t"beta", 0, 6))))
       
       test(t"Parse two words with three spaces"):
         parseText(t"alpha   beta")
-      .assert(_ == LazyList(Word(t"alpha", Pos(0, 0)), Word(t"beta", Pos(0, 8))))
+      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Word(t"beta", 0, 8))))
       
       test(t"Parse two words with newline"):
         parseText(t"alpha beta\n")
-      .assert(_ == LazyList(Word(t"alpha", Pos(0, 0)), Word(t"beta", Pos(0, 6))))
+      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Word(t"beta", 0, 6))))
 
       test(t"Parse two words with two lines"):
         parseText(t"alpha\nbeta")
-      .assert(_ == LazyList(Word(t"alpha", Pos(0, 0)), Word(t"beta", Pos(1, 0))))
+      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Newline(0), Word(t"beta", 1, 0))))
 
       test(t"Parse two words on two lines with indentation"):
         parseText(t"alpha\n  beta")
-      .assert(_ == LazyList(Word(t"alpha", Pos(0, 0)), Word(t"beta", Pos(1, 2))))
+      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Newline(2), Word(t"beta", 1, 2))))
 
       test(t"Parse two words on two lines with initial indentation"):
-        parseText(t" alpha\n  beta")
-      .assert(_ == LazyList(Word(t"alpha", Pos(0, 1)), Word(t"beta", Pos(1, 2))))
+        parseText(t" alpha\n   beta")
+      .assert(_ == CodlStream(1, LazyList(Word(t"alpha", 0, 1), Newline(2), Word(t"beta", 1, 3))))
       
       test(t"Parse two words on two lines with initial newline"):
         parseText(t"\nalpha\n  beta")
-      .assert(_ == LazyList(Word(t"alpha", Pos(1, 0)), Word(t"beta", Pos(2, 2))))
+      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 1, 0), Newline(2), Word(t"beta", 2, 2))))
       
       test(t"Parse text with whitespace on blank lines"):
-        parseText(t"root\n    two\n\n \npeer")
-      .assert(_ == LazyList(Word(t"root", Pos(0, 0)), Word(t"two", Pos(1, 4)), Word(t"peer", Pos(4, 0))))
+        parseText(t"root\n  two\n\n \npeer")
+      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Newline(2), Word(t"two", 1, 2), Newline(-2),
+          Word(t"peer", 4, 0))))
         
-      test(t"Parse initial comment"):
+      test(t"Parse shebang"):
         parseText(t"""|#!/bin/bash
                       |root
                       |""".s.stripMargin.show)
-      .assert(_ == LazyList(Word(t"#!/bin/bash", Pos(0, 0)), Word(t"root", Pos(1, 0))))
+      .assert(_ == CodlStream(0, LazyList(Comment(t"!/bin/bash", 0, 1), Newline(0), Word(t"root", 1, 0))))
+      
+      test(t"Parse initial comment"):
+        parseText(t"""|# Initial comment
+                      |root""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Comment(t"Initial comment", 0, 2), Newline(0), Word(t"root", 1, 0))))
+      
+      test(t"Parse two-line comment"):
+        parseText(t"""|# Line 1
+                      |# Line 2
+                      |root""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Comment(t"Line 1", 0, 2), Newline(0), Comment(t"Line 2", 1, 2),
+          Newline(0), Word(t"root", 2, 0))))
+
+      test(t"Parse double indentation"):
+        parseText(t"""|root
+                      |    child content
+                      |""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content", 1, 4))))
+      
+      test(t"Parse double indentation then peer"):
+        import logging.stdout
+        parseText(t"""|root
+                      |    child content
+                      |next
+                      |""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content", 1, 4), Newline(0), Word(t"next", 2, 0))))
+      
+      test(t"Parse double indentation then peer with margin"):
+        import logging.stdout
+        parseText(t"""| root
+                      |     child content
+                      | next
+                      |""".s.stripMargin.show)
+      .assert(_ == CodlStream(1, LazyList(Word(t"root", 0, 1), Block(t"child content", 1, 5), Newline(0), Word(t"next", 2, 1))))
+      
+      test(t"Parse double indentation then peer with margin and indent"):
+        import logging.stdout
+        parseText(t"""| root
+                      |     child content
+                      |   next
+                      |""".s.stripMargin.show)
+      .assert(_ == CodlStream(1, LazyList(Word(t"root", 0, 1), Block(t"child content", 1, 5), Newline(2), Word(t"next", 2, 3))))
+      
+      test(t"Parse multiline content"):
+        parseText(t"""|root
+                      |    child content
+                      |    more
+                      |""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content\nmore", 1, 4))))
+      
+      test(t"Parse multiline content then peer"):
+        parseText(t"""|root
+                      |    child content
+                      |    more
+                      |next
+                      |""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content\nmore", 1, 4), Newline(0), Word(t"next", 3, 0))))
+      
+      test(t"Parse multiline content then indent"):
+        parseText(t"""|root
+                      |    child content
+                      |    more
+                      |  next
+                      |""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content\nmore", 1, 4), Newline(2), Word(t"next", 3, 2))))
+      
+      test(t"Parse multiline content then indented comment"):
+        parseText(t"""|root
+                      |    child content
+                      |    more
+                      |  # comment
+                      |""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content\nmore", 1, 4), Newline(2), Comment(t"comment", 3, 4))))
+      
+      test(t"Parse multiline content including a hash"):
+        parseText(t"""|root
+                      |    content
+                      |    # not a comment
+                      |""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"content\n# not a comment", 1, 4))))
+      
+      test(t"Parse multiline content including a additional indentation"):
+        parseText(t"""|root
+                      |    content
+                      |     indented
+                      |""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"content\n indented", 1, 4))))
+      
+      test(t"Surplus indentation"):
+        capture:
+          parseText(t"""|root
+                        |     surplus-indented
+                        |""".s.stripMargin.show)
+      .assert(_ == CodlParseError(1, 5, CodlParseError.Issue.SurplusIndent))
+      
+      test(t"Uneven indentation"):
+        capture:
+          parseText(t"""|root
+                        | uneven indented
+                        |""".s.stripMargin.show)
+      .assert(_ == CodlParseError(1, 1, CodlParseError.Issue.UnevenIndent(1, 0)))
+
+      test(t"Uneven indentation 2"):
+        capture:
+          parseText(t"""|root
+                        |   uneven indented
+                        |""".s.stripMargin.show)
+      .assert(_ == CodlParseError(1, 3, CodlParseError.Issue.UnevenIndent(3, 0)))
+      
+      test(t"Uneven de-indentation"):
+        capture:
+          parseText(t"""|root
+                        |  child
+                        | deindentation
+                        |""".s.stripMargin.show)
+      .assert(CodlParseError(1, 1, CodlParseError.Issue.SurplusIndent) == _)
 
     suite(t"Access tests"):
       val doc = Doc(
@@ -103,85 +365,85 @@ object Tests extends Suite(t"CoDL tests"):
         doc.term().name(0).beta().key
       .assert(_ == t"beta")
     
-    suite(t"Untyped parsing tests"):
-      test(t"Empty document"):
-        Schema.Freeform.parse(t"")
-      .assert(_ == Doc())
+    // suite(t"Untyped parsing tests"):
+    //   test(t"Empty document"):
+    //     Schema.Freeform.parse(t"")
+    //   .assert(_ == Doc())
       
-      test(t"Simplest non-empty document"):
-        Schema.Freeform.parse(t"root")
-      .assert(_ == Doc(Node(Data(t"root"))))
+    //   test(t"Simplest non-empty document"):
+    //     Schema.Freeform.parse(t"root")
+    //   .assert(_ == Doc(Node(Data(t"root"))))
       
-      test(t"Root peers"):
-        Schema.Freeform.parse(t"root\nelement\n")
-      .assert(_ == Doc(Node(t"root")(), Node(t"element")()))
+    //   test(t"Root peers"):
+    //     Schema.Freeform.parse(t"root\nelement\n")
+    //   .assert(_ == Doc(Node(t"root")(), Node(t"element")()))
 
-      test(t"Single child"):
-        Schema.Freeform.parse(t"root\n  child")
-      .assert(_ == Doc(Node(t"root")(Node(t"child")())))
+    //   test(t"Single child"):
+    //     Schema.Freeform.parse(t"root\n  child")
+    //   .assert(_ == Doc(Node(t"root")(Node(t"child")())))
       
-      test(t"Single child and peer"):
-        Schema.Freeform.parse(t"root\n  child\npeer")
-      .assert(_ == Doc(Node(t"root")(Node(t"child")()), Node(t"peer")()))
+    //   test(t"Single child and peer"):
+    //     Schema.Freeform.parse(t"root\n  child\npeer")
+    //   .assert(_ == Doc(Node(t"root")(Node(t"child")()), Node(t"peer")()))
       
-      test(t"Single child and grandchild"):
-        Schema.Freeform.parse(t"root\n  child\n    grandchild")
-      .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"grandchild")()))))
+    //   test(t"Single child and grandchild"):
+    //     Schema.Freeform.parse(t"root\n  child\n    grandchild")
+    //   .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"grandchild")()))))
       
-      test(t"Single child and grandchild and peer"):
-        Schema.Freeform.parse(t"root\n  child\n    grandchild\npeer")
-      .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"grandchild")())), Node(t"peer")()))
+    //   test(t"Single child and grandchild and peer"):
+    //     Schema.Freeform.parse(t"root\n  child\n    grandchild\npeer")
+    //   .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"grandchild")())), Node(t"peer")()))
       
-      val schema = Schema(ListMap(
-                     t"root" -> Schema(ListMap(
-                       t"first" -> Schema(),
-                       t"second" -> Schema(),
-                       t"third" -> Schema(),
-                       t"child" -> Schema(ListMap(
-                         t"one" -> Schema(),
-                         t"two" -> Schema()
-                       )),
-                       t"other" -> Schema(ListMap(
-                         t"param" -> Schema(ListMap(), Multiplicity.Joined),
-                       ))
-                     ))
-                   ))
+    //   val schema = Schema(ListMap(
+    //                  t"root" -> Schema(ListMap(
+    //                    t"first" -> Schema(),
+    //                    t"second" -> Schema(),
+    //                    t"third" -> Schema(),
+    //                    t"child" -> Schema(ListMap(
+    //                      t"one" -> Schema(),
+    //                      t"two" -> Schema()
+    //                    )),
+    //                    t"other" -> Schema(ListMap(
+    //                      t"param" -> Schema(ListMap(), Multiplicity.Joined),
+    //                    ))
+    //                  ))
+    //                ))
 
-      test(t"Root and param"):
-        schema.parse(t"root param")
-      .assert(_ == Doc(Node(t"root")(Node(t"first")(Node(t"param")()))))
+    //   test(t"Root and param"):
+    //     schema.parse(t"root param")
+    //   .assert(_ == Doc(Node(t"root")(Node(t"first")(Node(t"param")()))))
       
-      test(t"Root and two params"):
-        schema.parse(t"root param1 param2")
-      .assert(_ == Doc(Node(t"root")(Node(t"first")(Node(t"param1")()), Node(t"second")(Node(t"param2")()))))
+    //   test(t"Root and two params"):
+    //     schema.parse(t"root param1 param2")
+    //   .assert(_ == Doc(Node(t"root")(Node(t"first")(Node(t"param1")()), Node(t"second")(Node(t"param2")()))))
       
-      test(t"Root and three params"):
-        schema.parse(t"root param1 param2 param3")
-      .assert(_ == Doc(Node(t"root")(Node(t"first")(Node(t"param1")()), Node(t"second")(Node(t"param2")()), Node(t"third")(Node(t"param3")()))))
+    //   test(t"Root and three params"):
+    //     schema.parse(t"root param1 param2 param3")
+    //   .assert(_ == Doc(Node(t"root")(Node(t"first")(Node(t"param1")()), Node(t"second")(Node(t"param2")()), Node(t"third")(Node(t"param3")()))))
       
-      test(t"Child with param"):
-        schema.parse(t"root\n  child param3")
-      .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"one")(Node(t"param3")())))))
+    //   test(t"Child with param"):
+    //     schema.parse(t"root\n  child param3")
+    //   .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"one")(Node(t"param3")())))))
       
-      test(t"Root with indent of 1"):
-        Schema.Freeform.parse(t" root")
-      .assert(_ == Doc(List(Node(t"root")()), 1))
+    //   test(t"Root with indent of 1"):
+    //     Schema.Freeform.parse(t" root")
+    //   .assert(_ == Doc(List(Node(t"root")()), 1))
 
-      test(t"Single child with indent of 3"):
-        Schema.Freeform.parse(t"   root\n     child")
-      .assert(_ == Doc(List(Node(t"root")(Node(t"child")())), 3))
+    //   test(t"Single child with indent of 3"):
+    //     Schema.Freeform.parse(t"   root\n     child")
+    //   .assert(_ == Doc(List(Node(t"root")(Node(t"child")())), 3))
       
-      test(t"Single child with joined parameter"):
-        schema.parse(t"root\n  other Hello World")
-      .assert(_ == Doc(Node(t"root")(Node(t"other")(Node(t"param")(Node(t"Hello World")())))))
+    //   test(t"Single child with joined parameter"):
+    //     schema.parse(t"root\n  other Hello World")
+    //   .assert(_ == Doc(Node(t"root")(Node(t"other")(Node(t"param")(Node(t"Hello World")())))))
 
-      test(t"Parse peer root nodes (with indent)"):
-        Schema.Freeform.parse(t"  root\n  peer")
-      .assert(_ == Doc(List(Node(t"root")(), Node(t"peer")()), 2))
+    //   test(t"Parse peer root nodes (with indent)"):
+    //     Schema.Freeform.parse(t"  root\n  peer")
+    //   .assert(_ == Doc(List(Node(t"root")(), Node(t"peer")()), 2))
       
-      test(t"Parse peer root node with parameters"):
-        Schema.Freeform.parse(t"  root  param1 param2\n  peer")
-      .assert(_ == Doc(List(Node(t"root")(Node(t"param1")(), Node(t"param2")()), Node(t"peer")()), 2))
+    //   test(t"Parse peer root node with parameters"):
+    //     Schema.Freeform.parse(t"  root  param1 param2\n  peer")
+    //   .assert(_ == Doc(List(Node(t"root")(Node(t"param1")(), Node(t"param2")()), Node(t"peer")()), 2))
 
     // suite(t"Parsing tests"):
     //   import Line.*
@@ -450,128 +712,135 @@ object Tests extends Suite(t"CoDL tests"):
     //     """)
     //   .assert { _ => true }
 
-      test(t"single unindent"):
-        Schema.Freeform.parse(t"""|root
-                                  |  child1
-                                  |    grandchild1
-                                  |  child2
-                                  |""".s.stripMargin.show).root().child2()
-      .matches:
-        case Data(t"child2", Nil, _) =>
+      // test(t"single unindent"):
+      //   Schema.Freeform.parse(t"""|root
+      //                             |  child1
+      //                             |    grandchild1
+      //                             |  child2
+      //                             |""".s.stripMargin.show).root().child2()
+      // .matches:
+      //   case Data(t"child2", Nil, _) =>
       
-      test(t"double unindent"):
-        Schema.Freeform.parse(t"""|root
-                                  |  child
-                                  |    grandchild
-                                  |root2
-                                  |""".s.stripMargin.show).root2()
-      .matches:
-        case Data(t"root2", Nil, _) =>
+      // test(t"double unindent"):
+      //   Schema.Freeform.parse(t"""|root
+      //                             |  child
+      //                             |    grandchild
+      //                             |root2
+      //                             |""".s.stripMargin.show).root2()
+      // .matches:
+      //   case Data(t"root2", Nil, _) =>
 
-      test(t"indented param"):
-        Schema.Freeform.parse(t"""
-          root
-              Long text
-        """).root() //.children.head
-      .assert(_ == Node(t"Long text")())
+      // test(t"indented param"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //         Long text
+      //   """).root()(0)
+      // .assert(_ == Node(t"Long text")())
       
-      test(t"indented param then peer"):
-        import logging.stdout
-        Schema.Freeform.parse(t"""
-          root
-              Long text
-          peer
-        """).root() //.children.head
-      .assert(_ == Node(t"Long text")())
+      // test(t"indented param then peer"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //         Long text
+      //     peer
+      //   """).root()(0)
+      // .assert(_ == Node(t"Long text")())
       
-      test(t"indented param then child"):
-        Schema.Freeform.parse(t"""
-          root
-              Long text
-            child
-        """).root().children.head
-      .assert(_ == Node(t"Long text")())
+      // test(t"indented param then child"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //         Long text
+      //       child
+      //   """).root()(0)
+      // .assert(_ == Node(t"Long text")())
       
-      test(t"multiline param"):
-        Schema.Freeform.parse(t"""
-          root
-              Line 1
-              Line 2
-            child
-        """).root().children.head
-      .assert(_ == Node(t"Line 1\nLine 2"))
+      // test(t"multiline param"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //         Line 1
+      //         Line 2
+      //       child
+      //   """).root()(0)
+      // .assert(_ == Node(t"Line 1\nLine 2")())
       
-    //   test(t"multiline param allows uneven indentation"):
-    //     Codl.parse(t"""
-    //       root
-    //           Line 1
-    //            Line 2
-    //         child
-    //     """).children.head.asInstanceOf[Node].params.last(1)
-    //   .assert(_ == t"Line 1\n Line 2")
+      // test(t"multiline param allows uneven indentation"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //         Line 1
+      //          Line 2
+      //       child
+      //   """).root()(0)
+      // .assert(_ == Node(t"Line 1\n Line 2")())
       
-    //   test(t"indented param can be last thing in doc"):
-    //     Codl.parse(t"""
-    //       root
-    //           Long text
-    //     """).children.head.asInstanceOf[Node].params.last(1)
-    //   .assert(_ == t"Long text")
+      // test(t"multiline param allows extra even indentation"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //         Line 1
+      //           Line 2
+      //       child
+      //   """).root()(0)
+      // .assert(_ == Node(t"Line 1\n  Line 2")())
       
-    //   test(t"multiline param includes trailing spaces"):
-    //     Codl.parse(t"""
-    //       root
-    //           Long text   
-    //     """).children.head.asInstanceOf[Node].params.last(1)
-    //   .assert(_ == t"Long text   ")
+      // test(t"indented param can be last thing in doc"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //         Long text""").root()(0)
+      // .assert(_ == Node(t"Long text")())
       
-    //   test(t"multiline param excludes trailing newline"):
-    //     Codl.parse(t"""
-    //       root
-    //           Long text
+      // test(t"multiline param includes trailing spaces"):
+      //   import logging.stdout
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //         Long text   
+      //   """).root()(0)
+      // .assert(_ == Node(t"Long text   ")())
+      
+      // test(t"multiline param excludes trailing newline"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //         Long text
 
-    //     """).children.head.asInstanceOf[Node].params.last(1)
-    //   .assert(_ == t"Long text")
+      //   """).root()(0)
+      // .assert(_ == Node(t"Long text")())
       
-    //   test(t"multiline param is not a comment"):
-    //     Codl.parse(t"""
-    //       root
-    //           # Long text
-    //     """).children.head.asInstanceOf[Node].params.last(1)
-    //   .assert(_ == t"# Long text")
+      // test(t"multiline param is not a comment"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //         # Long text
+      //   """).root()(0)
+      // .assert(_ == Node(t"# Long text")())
       
-    //   test(t"trailing comment is not a param"):
-    //     Codl.parse(t"""
-    //       root
-    //         child abc # comment
-    //     """).children.head.children.head.params.size
-    //   .assert(_ == 1)
+      // test(t"trailing comment is not a param"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //       child abc # comment
+      //   """).root().child
+      // .assert(_ == t"")
       
-    //   test(t"trailing comment is accessible"):
-    //     Codl.parse(t"""
-    //       root
-    //         child abc # comment
-    //     """).children.head.children.head
-    //   .matches:
-    //     case Node(_, _, _, Meta(_, _, Some(t"comment"))) =>
+      // test(t"trailing comment is accessible"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //       child abc # comment
+      //   """).root().child
+      // .assert(_ == t"comment")
       
-    //   test(t"leading comment is accessible"):
-    //     Codl.parse(t"""
-    //       root
-    //         # message
-    //         child abc
-    //     """).children.head.children.head
-    //   .matches:
-    //     case Node(_, _, _, Meta(List(t" message"), _, _)) =>
+      // test(t"leading comment is accessible"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //       # message
+      //       child abc
+      //   """).root()(0)
+      // .matches:
+      //   case Node(_, Meta(_, List(t" message"), _, _)) =>
       
-    //   test(t"leading comment is two lines long"):
-    //     Codl.parse(t"""
-    //       root
-    //         # line 1
-    //         # line 2
-    //         child abc
-    //     """).children.head.children.head
-    //   .matches:
-    //     case Node(_, _, _, Meta(List(t" line 1", t" line 2"), _, _)) =>
+      // test(t"leading comment is two lines long"):
+      //   Schema.Freeform.parse(t"""
+      //     root
+      //       # line 1
+      //       # line 2
+      //       child abc
+      //   """).root().children.head
+      // .matches:
+      //   case Node(_, Meta(0, List(t" line 1", t" line 2"), _, _)) =>
       
     //   test(t"blank line separates comments"):
     //     Codl.parse(t"""
@@ -615,7 +884,7 @@ object Tests extends Suite(t"CoDL tests"):
     //   .matches:
     //     case Gap(_, 2) =>
 
-    suite(t"Schema tests"):
+    //suite(t"Schema tests"):
 
       // val basicSchema = SchemaDoc.parse(t"""
       //   root
@@ -625,33 +894,33 @@ object Tests extends Suite(t"CoDL tests"):
       //       option* id!
       //     other?
       // """)
-      val basicSchema = Schema(ListMap(
-        t"root" -> Schema(ListMap(
-          t"item" -> Schema(ListMap(
-            t"value"   -> Schema(ListMap(), Multiplicity.Optional),
-            t"element" -> Schema(ListMap(t"param" -> Schema(ListMap(), Multiplicity.Optional))),
-            t"option"  -> Schema(ListMap(t"id" -> Schema(ListMap(), Multiplicity.Unique)), Multiplicity.Many)
-          )),
-          t"other" -> Schema(ListMap(), Multiplicity.Optional)
-        ))
-      ))
+      // val basicSchema = Schema(ListMap(
+      //   t"root" -> Schema(ListMap(
+      //     t"item" -> Schema(ListMap(
+      //       t"value"   -> Schema(ListMap(), Multiplicity.Optional),
+      //       t"element" -> Schema(ListMap(t"param" -> Schema(ListMap(), Multiplicity.Optional))),
+      //       t"option"  -> Schema(ListMap(t"id" -> Schema(ListMap(), Multiplicity.Unique)), Multiplicity.Many)
+      //     )),
+      //     t"other" -> Schema(ListMap(), Multiplicity.Optional)
+      //   ))
+      // ))
 
-      test(t"Simple schema structure"):
-        basicSchema.parse(t"""
-          root
-            item
-              value
-        """)
-      .assert(_ => true)
+      // test(t"Simple schema structure"):
+      //   basicSchema.parse(t"""
+      //     root
+      //       item
+      //         value
+      //   """)
+      // .assert(_ => true)
       
-      test(t"Schema doesn't contain child"):
-        capture:
-          basicSchema.parse(t"""
-            root
-              child
-          """)
-      .matches:
-        case AggregateError(List(CodlValidationError(_, CodlValidationError.Issue.InvalidKey(t"child")))) =>
+      // test(t"Schema doesn't contain child"):
+      //   capture:
+      //     basicSchema.parse(t"""
+      //       root
+      //         child
+      //     """)
+      // .matches:
+      //   case AggregateError(List(CodlValidationError(_, CodlValidationError.Issue.InvalidKey(t"child")))) =>
         
     //   test(t"Required value must be included"):
     //     capture:

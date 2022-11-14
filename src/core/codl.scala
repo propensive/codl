@@ -9,6 +9,654 @@ import eucalyptus.*
 import rudiments.*
 import wisteria.*
 
+given Realm(t"codl")
+
+opaque type Character = Long
+object Character:
+  val End: Character = Long.MaxValue
+  def apply(int: Int, line: Int, col: Int): Character =
+    int.toLong | ((line.toLong&0xffffff) << 48) | ((col.toLong&0xffffff) << 24)
+  
+  given Typeable[Character] with
+    def unapply(value: Any): Option[value.type & Character] = value match
+      case char: Char => Some(value.asInstanceOf[value.type & Character])
+      case _          => None
+
+  erased given CanEqual[Char, Character] = compiletime.erasedValue
+  erased given CanEqual[Character, Char] = compiletime.erasedValue
+
+  extension (char: Character)
+    def char: Char = if char == -1 then '\u0000' else char.toChar
+    def line: Int = ((char >> 48) & 0xffffff).toInt
+    def column: Int = ((char >> 24) & 0xffffff).toInt
+
+import Character.*
+import CodlParseError.Issue.*
+
+class PositionReader(private val in: Reader):
+  private var lastLine: Int = 0
+  private var lastCol: Int = 0
+  private var startLine: Int = 0
+  private var startCol: Int = 0
+  private var requireCr: Option[Boolean] = None
+  private var finished: Boolean = false
+  private val buf: StringBuilder = StringBuilder()
+  
+  private def advance(char: Character): Unit = char.char match
+    case '\n' =>
+      lastLine += 1
+      lastCol = 0
+    case _ =>
+      lastCol += 1
+  
+  def next()(using Log): Character throws CodlParseError =
+    if finished then throw IllegalStateException("Attempted to read past the end of the stream")
+    in.read() match
+      case -1 =>
+        finished = true
+        Character.End
+      case '\r' =>
+        requireCr match
+          case None        => requireCr = Some(true)
+          case Some(false) => throw CodlParseError(lastLine, lastCol, CarriageReturnMismatch(false))
+          case Some(true)  => ()
+        
+        if in.read() != '\n' then throw CodlParseError(lastLine, lastCol, UnexpectedCarriageReturn)
+        
+        Character('\n', lastLine, lastCol).tap(advance)
+      
+      case '\n' =>
+        requireCr match
+          case Some(true)  => throw CodlParseError(lastLine, lastCol, CarriageReturnMismatch(true))
+          case None        => requireCr = Some(false)
+          case Some(false) => ()
+        
+        Character('\n', lastLine, lastCol).tap(advance)
+      
+      case ch =>
+        Character(ch, lastLine, lastCol).tap(advance)
+  
+  def start(): (Int, Int) = (startLine, startCol)
+  def get(): Text = buf.toString.show.tap(buf.clear().waive)
+  
+  def put(char: Character): Unit =
+    if buf.isEmpty then
+      startLine = char.line
+      startCol = char.column
+
+    buf.append(char.char)
+
+sealed trait CodlError extends Exception
+
+object CodlParseError:
+  given Show[Issue] =
+    case UnexpectedCarriageReturn =>
+      t"TODO"
+    case CarriageReturnMismatch(true) =>
+      t"TODO"
+    case CarriageReturnMismatch(false) =>
+      t"TODO"
+    case UnevenIndent(initial, indent) =>
+      t"TODO"
+    case IndentAfterComment =>
+      t"TODO"
+    case SurplusIndent =>
+      t"TODO"
+    case InsufficientIndent =>
+      t"TODO"
+  
+  enum Issue:
+    case UnexpectedCarriageReturn
+    case CarriageReturnMismatch(required: Boolean)
+    case UnevenIndent(initial: Int, indent: Int)
+    case IndentAfterComment, SurplusIndent, InsufficientIndent
+
+export CodlParseError.Issue.{UnevenIndent, IndentAfterComment, SurplusIndent, InsufficientIndent}
+
+case class BinaryError(expectation: Text, pos: Int)
+extends Exception(s"expected $expectation at position $pos")
+
+case class CodlParseError(line: Int, col: Int, issue: CodlParseError.Issue)
+extends Error(err"could not parse CoDL document at $line:$col: ${issue.show}"), CodlError
+
+object CodlValidationError:
+  enum Issue:
+    case MissingKey(key: Maybe[Text])
+    case DuplicateKey(key: Text, firstPos: Int)
+    case SurplusParams
+    case RequiredAfterOptional
+    case InvalidKey(key: Maybe[Text])
+    case DuplicateId(id: Text)
+
+case class CodlValidationError(word: Maybe[Text], issue: CodlValidationError.Issue)
+extends Error(err"the CoDL document did not conform to the schema at $word because $issue"), CodlError
+
+case class MultipleIdentifiersError(key: Text)
+extends Exception(s"multiple parameters of $key have been marked as identifiers")
+
+case class MissingValueError(key: Text)
+extends Error(err"the key $key does not exist in the CoDL document")
+
+case class MissingIndexValueError(index: Int)
+extends Error(err"the index $index does not exist in the CoDL document")
+
+enum Token:
+  case Newline(n: Int)
+  case Tab(n: Int)
+  case Word(text: Text, line: Int, col: Int)
+  case Block(text: Text, line: Int, col: Int)
+  case Comment(text: Text, line: Int, col: Int)
+  case Remark(text: Text, line: Int, col: Int)
+  case Blank(count: Int)
+
+  override def toString(): String = this match
+    case Word(t, l, c)    => (t"[$t:$l:$c]").s
+    case Tab(n)           => t"==>".s
+    case Newline(n)       => (t"{"+(t"-"*(-n))+(t"+"*n)+t"}").s
+    case Block(t, l, c)   => t"#[bl[${t}]]#".s
+    case Comment(t, l, c) => t"~$t:$l:$c~".s
+    case Remark(t, l, c)  => t"^$t:$l:$c^".s
+    case Blank(c)         => (t"\\n"*c).s
+
+case class CodlStream(margin: Int, tokens: LazyList[Token]):
+  override def toString: String = s"(${margin}) ${tokens.mkString(" · ")}"
+
+def tokenize(in: Reader)(using Log): CodlStream throws CodlParseError =
+  val reader = PositionReader(in)
+
+  enum State:
+    case Word, Hash, Comment, Indent, Space, Tab, Margin
+  
+  import State.*
+
+  @tailrec
+  def cue(): Character = reader.next() match
+    case ch if ch.char == '\n' || ch.char == ' ' => cue()
+    case ch                                      => ch
+  
+  val first: Character = cue()
+  val margin: Int = first.column
+
+  def istream(char: Character, state: State = Indent, indent: Int = margin): LazyList[Token] =
+    stream(char, state, indent)
+  
+  @tailrec
+  def stream(char: Character, state: State = Indent, indent: Int = margin): LazyList[Token] =
+    Log.fine(t"stream('${char.char}', $state, $indent)")
+    inline def recur(state: State, indent: Int = indent): LazyList[Token] = stream(reader.next(), state, indent)
+    inline def irecur(state: State, indent: Int = indent): LazyList[Token] = istream(reader.next(), state, indent)
+    inline def diff: Int = char.column - indent
+
+    def token(): Token = state match
+      case Comment => Token.Comment(reader.get(), reader.start()(0), reader.start()(1))
+      case Margin  => Token.Block(reader.get().drop(1, Rtl), reader.start()(0), reader.start()(1))
+      case Word    => Token.Word(reader.get(), reader.start()(0), reader.start()(1))
+      case _       => ???
+
+    def put(next: State, stop: Boolean = false): LazyList[Token] = token() #:: irecur(next)
+    
+    inline def consume(next: State): LazyList[Token] =
+      reader.put(char)
+      recur(next)
+
+    inline def block(): LazyList[Token] =
+      if char.char != ' ' && diff < 4 then token() #:: istream(char)
+      else
+        if char.char != ' ' || diff >= 4 then reader.put(char)
+        recur(Margin)
+    
+    inline def newline(next: State): LazyList[Token] =
+      if diff > 4 then throw CodlParseError(char.line, char.column, CodlParseError.Issue.SurplusIndent)
+      if diff%2 != 0 then throw CodlParseError(char.line, char.column, CodlParseError.Issue.UnevenIndent(margin, char.column))
+      Token.Newline(diff) #:: irecur(next, indent = char.column)
+
+    char.char match
+      case _ if char == End => state match
+        case Indent    => LazyList()
+        case Space     => LazyList()
+        case Tab       => LazyList()
+        case Hash      => LazyList()
+        case Comment   => LazyList(token())
+        case Word      => LazyList(token())
+        case Margin    => LazyList(token())
+      
+      case '\n' => state match
+        case Word | Comment => put(Indent)
+        case Margin         => block()
+        case _              => recur(Indent)
+      
+      case ' ' => state match
+        case Space | Tab => recur(Tab)
+        case Indent      => recur(Indent)
+        case Word        => put(Space)
+        case Comment     => consume(Comment)
+        case Margin      => block()
+        case Hash        => recur(Comment)
+      
+      case '#' => state match
+        case Space     => recur(Comment)
+        case Tab       => recur(Comment)
+        case Word      => consume(Word)
+        case Indent    => if diff == 4 then recur(Margin) else newline(Hash)
+        case Comment   => consume(Comment)
+        case Margin    => block()
+        case Hash      => ??? //stream(next(), Comment, indent)
+      
+      case ch => state match
+        case Space   => consume(Word)
+        case Tab     => consume(Word)
+        case Word    => consume(Word)
+        case Comment => consume(Comment)
+        case Indent  => reader.put(char); if diff == 4 then recur(Margin) else newline(Word)
+        case Margin  => block()
+        
+        case Hash => char.char match
+          case '!' if first.line == 0 && first.column == 1 => consume(Comment)
+          case ch                                          => consume(Comment)
+
+  CodlStream(first.column, stream(first).tail)
+
+
+  // def indirect(cur: Character, state: State, indent: Int)(using Log)
+  //             : LazyList[Token] throws CodlParseError =
+  //   stream(cur, pos, state, indent, start)
+
+  // @tailrec
+  // final def stream(char: Character = Character(in.read()), pos: Pos = Pos(0, 0), state: State = Indent(0, 0),
+  //                      indent: Int = 0, start: Pos = Pos(0, 0))(using Log)
+  //                 : LazyList[Token] throws CodlParseError =
+  //   Log.info(t"stream('${char.char}', ${pos.line}:${pos.col}, $state, $indent, ${start.line}:${start.col})")
+  //   def take() = buf.append(char.char)
+  //   def word() = Token.Word(get(), start)
+  //   def comment() = Token.Comment(get(), start)
+  //   def block() = Token.Block(get(), start)
+    
+  //   def startline(n: Int): Int throws CodlParseError =
+  //     // if (n - indent)%2 == 1 then throw CodlParseError(pos, UnevenIndent(margin, n))
+  //     // if (n - indent)/2 > 2 then throw CodlParseError(pos, SurplusIndent)
+  //     n - indent
+
+  //   inline def recur(state: State, pos: Pos = pos.adv, indent: Int = indent, start: Pos = start) =
+  //     stream(Character(in.read()), pos, state, indent, start)
+    
+  //   inline def irecur(state: State, pos: Pos = pos.adv, indent: Int = indent, start: Pos = start) =
+  //     indirect(Character(in.read()), pos, state, indent, start)
+    
+  //   char match
+  //     case End  => state match
+  //       case Indent(_, _) | Space(_) | Hash => LazyList()
+  //       case Comment                        => LazyList(comment())
+  //       case Word                           => LazyList(word())
+  //       case Margin(n)                      => LazyList(block())
+      
+  //     case '\n' =>
+  //       state match
+  //         case Space(n)     => recur(Indent(0, 0), pos.newline)
+  //         case Word         => word() #:: irecur(Indent(0, 0), pos.newline)
+  //         case Indent(l, n) => recur(Indent(l + 1, 0), pos.newline)
+  //         case Comment      => comment() #:: irecur(Indent(0, 0), pos.newline)
+  //         case Margin(n)    => if n > indent + 4 then take(); recur(Margin(0), pos.newline)
+  //         case Hash         => recur(Indent(0, 0), pos.newline)
+      
+  //     case ' ' =>
+  //       state match
+  //         case Space(n)     => recur(Space(n + 1))
+  //         case Word         => word() #:: irecur(Space(1))
+  //         case Indent(l, n) => recur(Indent(l, n + 1))
+  //         case Comment      => take(); irecur(Comment)
+  //         case Margin(n)    => if n > indent + 4 then take(); recur(Margin(n + 1))
+  //         case Hash         => recur(Comment)
+      
+  //     case '#' =>
+  //       state match
+  //         case Space(n)     => recur(Comment)
+  //         case Word         => take(); recur(Word)
+  //         case Indent(l, n) => Token.Depth(startline(n)) #:: irecur(Hash, indent = n)
+  //         case Comment      => take(); recur(Comment)
+  //         case Margin(n)    => if n > indent + 4 then take(); recur(Indent(0, indent - n))
+  //         case Hash         => ??? //stream(next(), Comment, indent)
+      
+  //     case char =>
+  //       state match
+  //         case Space(n)     => take(); recur(Word, start = pos)
+  //         case Word         => take(); recur(Word)
+  //         case Indent(l, n) => take(); Token.Depth(startline(n)) #:: irecur(Word, indent = n, start = pos)
+  //         case Comment      => take(); recur(Comment)
+          
+  //         case Margin(n) =>
+  //           if n >= indent + 4 then take()
+  //           Token.Depth(startline(n)) #:: irecur(Indent(0, indent - n))
+          
+  //         case Hash => char match
+  //           case '!' if pos == Pos(0, 1) => take(); recur(Comment)
+  //           case _                       => ???
+
+//   @tailrec
+//   final def stream(cur: Character = read(), pos: Pos = Pos(0, 0), space: Boolean = true): LazyList[Token.Word] =
+//     cur match
+//       case End        => if buf.isEmpty then LazyList() else LazyList(word(pos))
+//       case ' '        => if !space then word(pos) #:: indirect(read(), pos.adv)
+//                          else stream(read(), pos.adv)
+//       case '\n'       => if !space then word(pos) #:: indirect(read(), pos.crlf)
+//                          else stream(read(), pos.crlf)
+//       case other      => buf.append(other.char)
+//                          stream(read(), pos.adv, false)
+
+// object Codl:
+//   val out = java.io.PrintStream(java.io.FileOutputStream(java.io.FileDescriptor.out))
+
+//   enum State:
+//     case Start, Comment, Params, Multiline, LastParam
+
+//   def parse(in: Reader, schema: ListMap[Maybe[Text], Schema])(using Log): Doc throws CodlParseError | AggregateError | CodlValidationError =
+//     val buf: StringBuilder = StringBuilder()
+
+//     @tailrec
+//     def trees(state: State, stream: LazyList[Token.Word], stack: List[Node], margin: Int, line: Int, end: Int,
+//                   schemata: List[ListMap[Maybe[Text], Schema]])
+//              : Doc throws CodlParseError | CodlValidationError =
+//       Log.info(s"trees($state, ${stream.map(_.text).join(t"", t"…", t"!")}, ${stack.init.map(_.debug).join(t"/")}, mgn=$margin ln=$line end=$end)")
+//       val level: Int = stack.length - 1
+//       val indent: Int = level*2 + margin
+
+//       def squish: List[Node] = state match
+//         case State.LastParam | State.Multiline =>
+//           val skey -> _ = schemata.head.head
+//           stack match
+//             case Node(Data(key, children, layout), meta) :: tail =>
+//               skey.option match
+//                 case None =>
+//                   Node(Data(key, Node(Data(buf.toString.show)) :: children, layout), meta) :: tail
+//                 case Some(skey) =>
+//                   Node(Data(key, Node(Data(skey, List(Node(Data(buf.toString.show))))) :: children, layout), meta) :: tail
+//             case _ =>
+//               throw Mistake("Should never match")
+//         case _ =>
+//           ???
+
+//       stream match
+//         case Token.Word(word, pos) #:: rest =>
+//           Log.info(t"word: $word ${pos.line}:${pos.col}")
+//           // Right at the start
+          
+//           if margin < 0 then trees(State.Start, stream, stack, pos.col, line, end, schemata)
+//           // Continuing the same line
+//           else if pos.line == line then
+//             val gap = pos.col - end
+            
+//             stack.head match
+//               case Node(Data(key, children, layout), meta) =>
+//                 val skey -> schema = schemata.head.headOption.getOrElse:
+//                   throw CodlValidationError(key, CodlValidationError.Issue.SurplusParams)
+
+//                 val head2 = skey.option.fold(Data(word))(Data(_, List(Node(Data(word)))))
+//                 val stack2 = Node(Data(key, Node(head2) :: children, layout), meta) :: stack.tail
+                
+//                 val schemata2 =
+//                   if schema.multiplicity.variadic then schemata else schemata.head.tail :: schemata.tail
+                
+//                 schema.multiplicity match
+//                   case Multiplicity.Joined =>
+//                     Log.info(t"Joined branch")
+//                     if state == State.LastParam then for i <- 0 until gap do buf.append(' ')
+//                     buf.append(word.s)
+//                     trees(State.LastParam, rest, stack, margin, pos.line, pos.col + word.length, schemata)
+                  
+//                   case Multiplicity.AtLeastOne | Multiplicity.Many =>
+//                     Log.info(t"variadic")
+                    
+//                     if state != State.Multiline
+//                     then trees(State.Params, rest, stack2, margin, pos.line, pos.col + word.length, schemata2)
+//                     else
+//                       for i <- 0 until gap do buf.append(' ')
+//                       buf.append(word.s)
+//                       trees(State.Multiline, rest, stack, margin, pos.line, pos.col + word.length, schemata2)
+                  
+//                   case Multiplicity.One | Multiplicity.Optional | Multiplicity.Unique =>
+//                     Log.info(t"unitary")
+//                     trees(State.Params, rest, stack2, margin, pos.line, pos.col + word.length, schemata2)
+              
+//               case _ =>
+//                 throw Mistake("impossible")
+
+          
+//           // Starting a new line
+//           else state match
+//             case State.LastParam =>
+//               Log.info("last param")
+//               trees(State.Params, stream, squish, margin, line, end, schemata.tail)
+//             case State.Multiline if pos.col - indent >= 2 =>
+//               Log.info("multiline word")
+//               buf.append('\n')
+//               for i <- 0 until (pos.col - indent - 2) do buf.append(' ')
+//               buf.append(word.s)
+//               trees(State.Multiline, rest, stack, margin, pos.line, pos.col + word.length, schemata)
+//             case State.Multiline =>
+//               trees(State.Params, stream, squish, margin, pos.line, pos.col, schemata)
+//             case _ => 
+//               (pos.col - indent) match
+                
+//                 // Line is uneven
+//                 case i if i%2 != 0 =>
+//                   throw CodlParseError(line, 0, UnevenIndent(margin, indent))
+                
+//                 // A new peer element
+//                 case 0 =>
+//                   if word.startsWith(t"#") then
+//                     buf.clear()
+//                     buf.append(word.drop(1))
+//                     trees(State.Comment, rest, stack, margin, line, end, schemata)
+//                   else
+//                     val subschemas = schemata.headOption.flatMap(_.get(word)).getOrElse(Schema.Freeform).subschemas
+//                     val stack2 = Node(Data(word)) :: stack
+//                     trees(State.Params, rest, stack2, margin, pos.line, pos.col + word.length, subschemas :: schemata)
+                
+//                 // Multiline content
+//                 case 2 =>
+//                   state match
+//                     // Continuation of a multiline content
+//                     case State.Multiline =>
+//                       Log.info("continuation")
+//                       buf.append('\n')
+//                       buf.append(word.s)
+//                       trees(State.Multiline, rest, stack, margin, pos.line, pos.col + word.length, schemata)
+                    
+//                     // The start of a new multiline parameter
+//                     case State.Params | State.LastParam =>
+//                       Log.info(t"New multiline parameter")
+//                       buf.clear()
+//                       buf.append(word.s)
+//                       trees(State.Multiline, rest, stack, margin, pos.line, pos.col + word.length, schemata)
+                    
+//                     case state =>
+//                       unsafely(throw new Exception("Got state: "+state))
+    
+//                 // Too much indentation
+//                 case i if i > 2 =>
+//                   Log.info(t"deep indent")
+//                   buf.clear()
+//                   buf.append(word)
+//                   trees(State.Multiline, rest, stack, margin, pos.line, pos.col + word.length, schemata)
+//                 // Some level of unindentation
+//                 case i =>
+//                   stack match
+//                     case node :: Node(Data(key, children, layout), meta) :: tail =>
+//                       Log.info(s"Pre-close = ${node.debug}")
+//                       Log.info(s"children = $children")
+//                       Log.info("")
+//                       trees(state, stream, Node(Data(key, node.close :: children, layout), meta) :: tail, margin, line, end, schemata.tail)
+//                     case _ =>
+//                       throw Mistake("Should never match")
+        
+//         case _ => stack match
+//           case Nil =>
+//             Doc(Nil, 0)
+          
+//           case Node(Data(t"", children, _), _) :: Nil =>
+//             Doc(children.reverse, margin.max(0))
+          
+//           case node :: Node(Data(key, children, layout), meta) :: tail =>
+//             state match
+//               case State.LastParam =>
+//                 trees(State.Params, stream, squish, margin, line, end, schemata.tail)
+//               case State.Multiline =>
+//                 trees(State.Params, stream, squish, margin, line, end, schemata.tail)
+//               case _ =>
+//                 val head2 = Node(Data(key, if node.empty then children else node.close :: children, layout), meta)
+//                 trees(state, stream, head2 :: tail, margin, line, end, schemata)
+          
+//           case _ =>
+//             throw Mistake("Should never match")
+          
+    
+//     trees(State.Start, Tokenizer(in).stream(), List(Node(Data(t""))), -1, -1, 0, List(schema))
+
+
+object Node:
+  given DebugString[Node] = _.data.option.fold(t"!") { data => t"${data.key}[${data.children.map(_.debug).join(t",")}]" }
+  val empty: Node = Node()
+  def apply(key: Text)(child: Node*): Node = Node(Data(key, child.to(List)))
+
+case class Node(data: Maybe[Data] = Unset, meta: Maybe[Meta] = Unset) extends Dynamic:
+  def add(node: Data): Node = copy(data = data.otherwise(???).copy())
+  def empty: Boolean = data == Unset && meta == Unset
+
+  def close: Node = data match
+    case Unset                       => Node(Unset, meta)
+    case Data(key, children, layout) => Node(Data(key, children.reverse, layout), meta)
+  
+  def selectDynamic(key: String): List[Data] throws MissingValueError =
+    data.option.getOrElse(throw MissingValueError(key.show)).selectDynamic(key)
+  
+  def applyDynamic(key: String)(idx: Int = 0): Data throws MissingValueError = selectDynamic(key)(idx)
+
+// // FIXME: Remove this later
+// extension [K, V](map: Map[K, List[V]])
+//   def plus(key: K, value: V): Map[K, List[V]] =
+//     map.updated(key, map.get(key).fold(List(value))(value :: _))
+
+trait Indexed extends Dynamic:
+  def children: List[Node]
+  private lazy val index: Map[Text, List[Data]] =
+    children.map(_.data).sift[Data].foldLeft(Map[Text, List[Data]]()): (acc, data) =>
+      acc.plus(data.key, data)
+    .view.mapValues(_.reverse).to(Map)
+
+  def apply(index: Int): Node throws MissingIndexValueError =
+    try children(index) catch case err: IndexOutOfBoundsException => throw MissingIndexValueError(index)
+
+  def selectDynamic(key: String): List[Data] throws MissingValueError =
+    index.get(key.show).getOrElse(throw MissingValueError(key.show))
+  
+  def applyDynamic(key: String)(idx: Int = 0): Data throws MissingValueError = selectDynamic(key)(idx)
+  
+case class Data(key: Text, children: List[Node] = Nil, layout: Maybe[Layout] = Unset) extends Indexed
+case class Meta(blank: Int, comments: List[Text], remark: Maybe[Text]/*, grid: Grid*/)
+case class Layout(params: Int, multiline: Boolean)
+
+object Doc:
+  def apply(node: Node*): Doc = Doc(node.to(List), 0)
+
+case class Doc(children: List[Node], margin: Int) extends Indexed
+
+object Schema:
+  object Freeform extends Schema(ListMap(Unset -> Schema(ListMap(), Multiplicity.Many)), Multiplicity.Many)
+
+case class Schema(subschemas: ListMap[Maybe[Text], Schema] = ListMap(), multiplicity: Multiplicity = Multiplicity.One):
+  // def parse(text: Text)(using Log): Doc throws AggregateError | CodlParseError | CodlValidationError =
+  //   Codl.parse(StringReader(text.s), subschemas)
+  
+  def apply(key: Maybe[Text]): Schema = subschemas.get(key).getOrElse(Schema.Freeform)
+
+enum Multiplicity:
+  case One, AtLeastOne, Optional, Many, Joined, Unique
+
+  def required: Boolean = this match
+    case One | Unique | AtLeastOne => true
+    case Optional | Many | Joined  => false
+
+  def variadic: Boolean = this match
+    case Joined | AtLeastOne | Many => true
+    case Optional | Unique | One    => false
+  
+  def repeatable: Boolean = this match
+    case AtLeastOne | Many => true
+    case _                 => false
+  
+  def unique: Boolean = !repeatable
+
+// enum Tweak:
+//   case HalfIndent, HalfOutdent
+
+// case class Recovery(suppliedFixes: List[Int]):
+//   var fixes: List[Int] = suppliedFixes
+//   var failures: List[CodlError] = Nil
+//   var appliedFixes: List[Int] = Nil
+//   var alternatives: Option[Int] = None
+
+// case class Raise(error: CodlError):
+//   def fix[T, F](defaultFix: F, alternatives: F*)(handle: F => T)(using recovery: Recovery): T throws AggregateError =
+//     throw AggregateError(List(error))
+//     /*
+//     recovery.failures ::= error
+//     val fix: F =
+//       if recovery.suppliedFixes.length > recovery.failures.size
+//       then
+//         alternatives(recovery.suppliedFixes(recovery.failures.size))
+//       else
+//         if recovery.suppliedFixes.length == recovery.failures.size
+//         then
+//           recovery.alternatives = Some(alternatives.size)
+
+//         defaultFix
+    
+//     recovery.appliedFixes ::= alternatives.indexOf(fix)
+//     handle(fix)*/
+  
+//   def recover[T](value: T)(using Recovery): T throws AggregateError = fix(())((_: Any) => value)
+
+// def raise[T, Fix](error: => CodlError) = Raise(error)
+
+// def attempt[T](fn: Recovery ?=> T): T throws AggregateError =
+  
+//   @tailrec
+//   def recur(recovery: Recovery): T =
+//     val result = fn(using recovery)
+    
+//     recovery.alternatives match
+//       case None =>
+//         if recovery.failures.length > 0 then throw AggregateError(recovery.failures)
+//         result
+//       case Some(n) =>
+//         val bestFix = (0 to n).minBy: index =>
+//           val trialRecovery = Recovery(index :: recovery.fixes)
+//           fn(using trialRecovery)
+//           trialRecovery.failures.length
+        
+//         recur(Recovery(bestFix :: recovery.suppliedFixes))
+  
+//   recur(Recovery(Nil))
+      
+case class AggregateError(errors: List[CodlError])
+extends Error(err"aggregation of errors: ${errors.map(_.toString.show).join.s}")
+
+// // case class MissingRefError(ref: Text, other: Any) extends Error(err"reference $ref was not found in ${other.toString}")
+
+// // case class InvalidFormatError() extends Error(err"the CoDL data was not in the expected format")
+
+
+// case class Grid(ranges: TreeMap[Int, Vector[Int]] = TreeMap()):
+//   def apply(line: Int): Vector[Int] = ranges.maxBefore(line + 1).fold(Vector())(_(1))
+  
+//   def add(line: Int, index: Int, column: Int): Grid =
+//     ranges.maxBefore(line + 1) match
+//       case None =>
+//         Grid(ranges.updated(line, Vector.fill(index)(0) :+ column))
+      
+//       case Some((rLine, cols)) =>
+//         if index >= cols.length then Grid(ranges.updated(rLine, cols.padTo(index, 0) :+ column))
+//         else if cols(index) == column then this
+//         else Grid(ranges.updated(line, cols.updated(index, column)))
 // object Bin:
 //   def write(out: Writer, number: Int): Unit = out.write((number + 32).toChar)
 
@@ -220,55 +868,6 @@ import wisteria.*
   
 //   def unique: Boolean = !repeatable
 
-opaque type Pos = Long
-object Pos:
-  def apply(line: Int, col: Int): Pos = (line.toLong << 32) + col
-
-  extension (pos: Pos)
-    def line: Int = (pos >> 32).toInt
-    def col: Int = pos.toInt
-    def crlf: Pos = Pos(line + 1, 0)
-    def adv: Pos = Pos(line, col + 1)
-
-opaque type Character = Int
-object Character:
-  val End: Character = Character(-1)
-  def apply(int: Int): Character = int
-  
-  given Typeable[Character] with
-    def unapply(value: Any): Option[value.type & Character] = value match
-      case char: Char => Some(value.asInstanceOf[value.type & Character])
-      case _          => None
-
-  erased given CanEqual[Char, Character] = compiletime.erasedValue
-  erased given CanEqual[Character, Char] = compiletime.erasedValue
-
-  extension (char: Character)
-    def char: Char = if char == -1 then '\u0000' else char.toChar
-    def int: Int = char
-
-case class Word(text: Text, pos: Pos)
-
-class Tokenizer(private val in: Reader):
-  import Character.End
-  private val buf: StringBuilder = StringBuilder()
-  private def read(): Character = Character(in.read())
-  private def indirect(cur: Character, pos: Pos, space: Boolean = true) = stream(cur, pos, space)
-  
-  private def word(pos: Pos): Word = Word(buf.toString.show, Pos(pos.line, pos.col - buf.length)).tap: _ =>
-    buf.clear()
-
-  @tailrec
-  final def stream(cur: Character = read(), pos: Pos = Pos(0, 0), space: Boolean = true): LazyList[Word] =
-    cur match
-      case End        => if buf.isEmpty then LazyList() else LazyList(word(pos))
-      case ' '        => if !space then word(pos) #:: indirect(read(), pos.adv)
-                         else stream(read(), pos.adv)
-      case '\n'       => if !space then word(pos) #:: indirect(read(), pos.crlf)
-                         else stream(read(), pos.crlf)
-      case other      => buf.append(other.char)
-                         stream(read(), pos.adv, false)
-
 // object Doc:
 //   given Show[Doc] = _.render
 
@@ -308,9 +907,9 @@ class Tokenizer(private val in: Reader):
 
 //     for i <- 0 until lines do buf.append('\n')
 
-// case class Node(key: Maybe[Text], params: Map[Maybe[Text], List[Text]] = Map(),
-//                       children: IArray[Point] = IArray(), meta: Meta = Meta.empty)
-// extends Data, Dynamic:
+//case class Node(key: Maybe[Text], params: Map[Maybe[Text], List[Text]] = Map(),
+                    //children: IArray[Point] = IArray(), meta: Meta = Meta.empty)
+//extends Data, Dynamic:
 
 //   override def equals(that: Any): Boolean = that.matchable(using Unsafe) match
 //     case that: Node =>
@@ -473,244 +1072,6 @@ class Tokenizer(private val in: Reader):
 
     // Doc(schema, validate(schema, tokens.stream.to(List), Map()), tokens.indentation)
 
-object Codl:
-
-  val out = java.io.PrintStream(java.io.FileOutputStream(java.io.FileDescriptor.out))
-
-  enum State:
-    case Start, Comment, Params, Multiline, LastParam
-
-  def parse(in: Reader, schema: ListMap[Maybe[Text], Schema])(using Log): Doc throws CodlParseError | AggregateError | CodlValidationError =
-    val buf: StringBuilder = StringBuilder()
-
-    @tailrec
-    def trees(state: State, stream: LazyList[Word], stack: List[Node], margin: Int, line: Int, end: Int,
-                  schemata: List[ListMap[Maybe[Text], Schema]])
-             : Doc throws CodlParseError | CodlValidationError =
-      Log.info(s"trees($state, ${stream.map(_.text).join(t"", t"…", t"!")}, ${stack.init.map(_.debug).join(t"/")}, mgn=$margin ln=$line end=$end)")
-      val level: Int = stack.length - 1
-      val indent: Int = level*2 + margin
-
-      def squish: List[Node] = state match
-        case State.LastParam | State.Multiline =>
-          val skey -> _ = schemata.head.head
-          stack match
-            case Node(Data(key, children, layout), meta) :: tail =>
-              skey.option match
-                case None =>
-                  Node(Data(key, Node(Data(buf.toString.show)) :: children, layout), meta) :: tail
-                case Some(skey) =>
-                  Node(Data(key, Node(Data(skey, List(Node(Data(buf.toString.show))))) :: children, layout), meta) :: tail
-            case _ =>
-              throw Mistake("Should never match")
-        case _ =>
-          ???
-
-      stream match
-        case Word(word, pos) #:: rest =>
-          Log.info(t"word: $word ${pos.line}:${pos.col}")
-          // Right at the start
-          
-          if margin < 0 then trees(State.Start, stream, stack, pos.col, line, end, schemata)
-          // Continuing the same line
-          else if pos.line == line then
-            val gap = pos.col - end
-            
-            stack.head match
-              case Node(Data(key, children, layout), meta) =>
-                val skey -> schema = schemata.head.headOption.getOrElse:
-                  throw CodlValidationError(key, CodlValidationError.Issue.SurplusParams)
-
-                val head2 = skey.option.fold(Data(word))(Data(_, List(Node(Data(word)))))
-                val stack2 = Node(Data(key, Node(head2) :: children, layout), meta) :: stack.tail
-                
-                val schemata2 =
-                  if schema.multiplicity.variadic then schemata else schemata.head.tail :: schemata.tail
-                
-                schema.multiplicity match
-                  case Multiplicity.Joined =>
-                    Log.info(t"Joined branch")
-                    if state == State.LastParam then for i <- 0 until gap do buf.append(' ')
-                    buf.append(word.s)
-                    trees(State.LastParam, rest, stack, margin, pos.line, pos.col + word.length, schemata)
-                  
-                  case Multiplicity.AtLeastOne | Multiplicity.Many =>
-                    Log.info(t"variadic")
-                    
-                    if state != State.Multiline
-                    then trees(State.Params, rest, stack2, margin, pos.line, pos.col + word.length, schemata2)
-                    else
-                      for i <- 0 until gap do buf.append(' ')
-                      buf.append(word.s)
-                      trees(State.Multiline, rest, stack, margin, pos.line, pos.col + word.length, schemata2)
-                  
-                  case Multiplicity.One | Multiplicity.Optional | Multiplicity.Unique =>
-                    Log.info(t"unitary")
-                    trees(State.Params, rest, stack2, margin, pos.line, pos.col + word.length, schemata2)
-              
-              case _ =>
-                throw Mistake("impossible")
-
-          
-          // Starting a new line
-          else state match
-            case State.LastParam =>
-              Log.info("last param")
-              trees(State.Params, stream, squish, margin, line, end, schemata.tail)
-            case State.Multiline if pos.col - indent >= 2 =>
-              Log.info("multiline word")
-              buf.append('\n')
-              buf.append(word.s)
-              trees(State.Multiline, rest, stack, margin, pos.line, pos.col + word.length, schemata)
-            case _ => 
-              (pos.col - indent) match
-                
-                // Line is uneven
-                case i if i%2 != 0 =>
-                  throw CodlParseError(line, 0, UnevenIndent(margin, indent))
-                
-                // A new peer element
-                case 0 =>
-                  if word.startsWith(t"#") then
-                    buf.clear()
-                    buf.append(word.drop(1))
-                    trees(State.Comment, rest, stack, margin, line, end, schemata)
-                  else
-                    val subschemas = schemata.headOption.flatMap(_.get(word)).getOrElse(Schema.Freeform).subschemas
-                    val stack2 = Node(Data(word)) :: stack
-                    trees(State.Params, rest, stack2, margin, pos.line, pos.col + word.length, subschemas :: schemata)
-                
-                // Multiline content
-                case 2 =>
-                  state match
-                    // Continuation of a multiline content
-                    case State.Multiline =>
-                      Log.info("continuation")
-                      buf.append('\n')
-                      buf.append(word.s)
-                      trees(State.Multiline, rest, stack, margin, pos.line, pos.col + word.length, schemata)
-                    
-                    // The start of a new multiline parameter
-                    case State.Params | State.LastParam =>
-                      Log.info("New multiline parameter")
-                      buf.clear()
-                      buf.append(word.s)
-                      trees(State.Multiline, rest, stack, margin, pos.line, pos.col + word.length, schemata)
-                    
-                    case _ =>
-                      ???
-    
-                // Too much indentation
-                case i if i > 2 =>
-                  Log.info(t"deep indent")
-                  buf.clear()
-                  buf.append(word)
-                  trees(State.Multiline, rest, stack, margin, pos.line, pos.col + word.length, schemata)
-                // Some level of unindentation
-                case i =>
-                  stack match
-                    case node :: Node(Data(key, children, layout), meta) :: tail =>
-                      Log.info(s"Pre-close = ${node.debug}")
-                      Log.info(s"children = $children")
-                      Log.info("")
-                      trees(state, stream, Node(Data(key, node.close :: children, layout), meta) :: tail, margin, line, end, schemata.tail)
-                    case _ =>
-                      throw Mistake("Should never match")
-        
-        case _ => stack match
-          case Nil =>
-            Doc(Nil, 0)
-          
-          case Node(Data(t"", children, _), _) :: Nil =>
-            Doc(children.reverse, margin.max(0))
-          
-          case node :: Node(Data(key, children, layout), meta) :: tail =>
-            state match
-              case State.LastParam =>
-                trees(State.Params, stream, squish, margin, line, end, schemata.tail)
-              case State.Multiline =>
-                trees(State.Params, stream, squish, margin, line, end, schemata.tail)
-              case _ =>
-                val head2 = Node(Data(key, if node.empty then children else node.close :: children, layout), meta)
-                trees(state, stream, head2 :: tail, margin, line, end, schemata)
-          
-          case _ =>
-            throw Mistake("Should never match")
-          
-    
-    trees(State.Start, Tokenizer(in).stream(), List(Node(Data(t""))), -1, -1, 0, List(schema))
-
-
-object Node:
-  given DebugString[Node] = _.data.option.fold(t"!") { data => t"${data.key}[${data.children.map(_.debug).join(t",")}]" }
-  val empty: Node = Node()
-  def apply(key: Text)(child: Node*): Node = Node(Data(key, child.to(List)))
-
-case class Node(data: Maybe[Data] = Unset, meta: Maybe[Meta] = Unset) extends Dynamic:
-  def add(node: Data): Node = copy(data = data.otherwise(???).copy())
-  def empty: Boolean = data == Unset && meta == Unset
-
-  def close: Node = data match
-    case Unset                       => Node(Unset, meta)
-    case Data(key, children, layout) => Node(Data(key, children.reverse, layout), meta)
-  
-  def selectDynamic(key: String): List[Data] throws MissingValueError =
-    data.option.getOrElse(throw MissingValueError(key.show)).selectDynamic(key)
-  
-  def applyDynamic(key: String)(idx: Int = 0): Data throws MissingValueError = selectDynamic(key)(idx)
-
-// FIXME: Remove this later
-extension [K, V](map: Map[K, List[V]])
-  def plus(key: K, value: V): Map[K, List[V]] =
-    map.updated(key, map.get(key).fold(List(value))(value :: _))
-
-trait Indexed extends Dynamic:
-  def children: List[Node]
-  private lazy val index: Map[Text, List[Data]] =
-    children.map(_.data).sift[Data].foldLeft(Map[Text, List[Data]]()): (acc, data) =>
-      acc.plus(data.key, data)
-    .view.mapValues(_.reverse).to(Map)
-  
-  def selectDynamic(key: String): List[Data] throws MissingValueError =
-    index.get(key.show).getOrElse(throw MissingValueError(key.show))
-  
-  def applyDynamic(key: String)(idx: Int = 0): Data throws MissingValueError = selectDynamic(key)(idx)
-  
-case class Data(key: Text, children: List[Node] = Nil, layout: Maybe[Layout] = Unset) extends Indexed
-case class Meta(blink: Int, comments: List[Text], remark: Maybe[Text], grid: Grid)
-case class Layout(params: Int, multiline: Boolean)
-
-object Doc:
-  def apply(node: Node*): Doc = Doc(node.to(List), 0)
-
-case class Doc(children: List[Node], margin: Int) extends Indexed
-
-object Schema:
-  object Freeform extends Schema(ListMap(Unset -> Schema(ListMap(), Multiplicity.Many)), Multiplicity.Many)
-
-case class Schema(subschemas: ListMap[Maybe[Text], Schema] = ListMap(), multiplicity: Multiplicity = Multiplicity.One):
-  def parse(text: Text)(using Log): Doc throws AggregateError | CodlParseError | CodlValidationError =
-    Codl.parse(StringReader(text.s), subschemas)
-  
-  def apply(key: Maybe[Text]): Schema = subschemas.get(key).getOrElse(Schema.Freeform)
-
-enum Multiplicity:
-  case One, AtLeastOne, Optional, Many, Joined, Unique
-
-  def required: Boolean = this match
-    case One | Unique | AtLeastOne => true
-    case Optional | Many | Joined  => false
-
-  def variadic: Boolean = this match
-    case Joined | AtLeastOne | Many => true
-    case Optional | Unique | One    => false
-  
-  def repeatable: Boolean = this match
-    case AtLeastOne | Many => true
-    case _                 => false
-  
-  def unique: Boolean = !repeatable
-
 
 
   // def tokenize(in: Reader)(using Log): RawStream throws AggregateError = attempt:
@@ -812,112 +1173,3 @@ enum Multiplicity:
   //         throw Mistake("This case should be unreachable")
 
   //   RawStream(trees(Tokenizer(in).stream(), 0, Nil, Nil), initPrefix)
-
-sealed trait CodlError extends Exception
-
-object CodlParseError:
-  enum Issue:
-    case UnevenIndent(initial: Int, indent: Int)
-    case IndentAfterComment, SurplusIndent, InsufficientIndent
-
-export CodlParseError.Issue.{UnevenIndent, IndentAfterComment, SurplusIndent, InsufficientIndent}
-
-case class BinaryError(expectation: Text, pos: Int)
-extends Exception(s"expected $expectation at position $pos")
-
-case class CodlParseError(line: Int, col: Int, indentation: CodlParseError.Issue)
-extends Error(err"could not parse CoDL document at $line:$col ${indentation.show}"), CodlError
-
-object CodlValidationError:
-  enum Issue:
-    case MissingKey(key: Maybe[Text])
-    case DuplicateKey(key: Text, firstPos: Int)
-    case SurplusParams
-    case RequiredAfterOptional
-    case InvalidKey(key: Maybe[Text])
-    case DuplicateId(id: Text)
-
-case class CodlValidationError(word: Maybe[Text], issue: CodlValidationError.Issue)
-extends Error(err"the CoDL document did not conform to the schema at $word because $issue"), CodlError
-
-case class MultipleIdentifiersError(key: Text)
-extends Exception(s"multiple parameters of $key have been marked as identifiers")
-
-case class MissingValueError(key: Text)
-extends Error(err"the key $key does not exist in the CoDL document")
-
-import CodlValidationError.Issue.*
-
-enum Tweak:
-  case HalfIndent, HalfOutdent
-
-case class Recovery(suppliedFixes: List[Int]):
-  var fixes: List[Int] = suppliedFixes
-  var failures: List[CodlError] = Nil
-  var appliedFixes: List[Int] = Nil
-  var alternatives: Option[Int] = None
-
-case class Raise(error: CodlError):
-  def fix[T, F](defaultFix: F, alternatives: F*)(handle: F => T)(using recovery: Recovery): T throws AggregateError =
-    throw AggregateError(List(error))
-    /*
-    recovery.failures ::= error
-    val fix: F =
-      if recovery.suppliedFixes.length > recovery.failures.size
-      then
-        alternatives(recovery.suppliedFixes(recovery.failures.size))
-      else
-        if recovery.suppliedFixes.length == recovery.failures.size
-        then
-          recovery.alternatives = Some(alternatives.size)
-
-        defaultFix
-    
-    recovery.appliedFixes ::= alternatives.indexOf(fix)
-    handle(fix)*/
-  
-  def recover[T](value: T)(using Recovery): T throws AggregateError = fix(())((_: Any) => value)
-
-def raise[T, Fix](error: => CodlError) = Raise(error)
-
-def attempt[T](fn: Recovery ?=> T): T throws AggregateError =
-  
-  @tailrec
-  def recur(recovery: Recovery): T =
-    val result = fn(using recovery)
-    
-    recovery.alternatives match
-      case None =>
-        if recovery.failures.length > 0 then throw AggregateError(recovery.failures)
-        result
-      case Some(n) =>
-        val bestFix = (0 to n).minBy: index =>
-          val trialRecovery = Recovery(index :: recovery.fixes)
-          fn(using trialRecovery)
-          trialRecovery.failures.length
-        
-        recur(Recovery(bestFix :: recovery.suppliedFixes))
-  
-  recur(Recovery(Nil))
-      
-case class AggregateError(errors: List[CodlError])
-extends Error(err"aggregation of errors: ${errors.map(_.toString.show).join.s}")
-
-// case class MissingRefError(ref: Text, other: Any) extends Error(err"reference $ref was not found in ${other.toString}")
-
-// case class InvalidFormatError() extends Error(err"the CoDL data was not in the expected format")
-
-given Realm(t"codl")
-
-case class Grid(ranges: TreeMap[Int, Vector[Int]] = TreeMap()):
-  def apply(line: Int): Vector[Int] = ranges.maxBefore(line + 1).fold(Vector())(_(1))
-  
-  def add(line: Int, index: Int, column: Int): Grid =
-    ranges.maxBefore(line + 1) match
-      case None =>
-        Grid(ranges.updated(line, Vector.fill(index)(0) :+ column))
-      
-      case Some((rLine, cols)) =>
-        if index >= cols.length then Grid(ranges.updated(rLine, cols.padTo(index, 0) :+ column))
-        else if cols(index) == column then this
-        else Grid(ranges.updated(line, cols.updated(index, column)))
