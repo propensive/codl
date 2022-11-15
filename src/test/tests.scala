@@ -167,100 +167,109 @@ object Tests extends Suite(t"CoDL tests"):
         case _: IllegalStateException =>
 
     suite(t"Tokenizer tests"):
-      def parseText(text: Text)(using Log): CodlStream = tokenize(StringReader(text.s))
+      def parseText(text: Text)(using Log): CodlStream = Codl.tokenize(StringReader(text.s))
 
       test(t"Parse two words with single space"):
         parseText(t"alpha beta")
-      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Word(t"beta", 0, 6))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"alpha", 0, 0), Item(t"beta", 0, 6))))
       
 
       test(t"Parse two words with trailing spaces"):
         parseText(t"alpha beta   ")
-      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Word(t"beta", 0, 6))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"alpha", 0, 0), Item(t"beta", 0, 6))))
       
       test(t"Parse two words with three spaces"):
         parseText(t"alpha   beta")
-      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Word(t"beta", 0, 8))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"alpha", 0, 0), Item(t"beta", 0, 8))))
       
       test(t"Parse two words with newline"):
         parseText(t"alpha beta\n")
-      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Word(t"beta", 0, 6))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"alpha", 0, 0), Item(t"beta", 0, 6))))
 
       test(t"Parse two words with two lines"):
         parseText(t"alpha\nbeta")
-      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Newline(0), Word(t"beta", 1, 0))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"alpha", 0, 0), Peer, Item(t"beta", 1, 0))))
 
       test(t"Parse two words on two lines with indentation"):
         parseText(t"alpha\n  beta")
-      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 0, 0), Newline(2), Word(t"beta", 1, 2))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"alpha", 0, 0), Indent, Item(t"beta", 1, 2))))
 
       test(t"Parse two words on two lines with initial indentation"):
         parseText(t" alpha\n   beta")
-      .assert(_ == CodlStream(1, LazyList(Word(t"alpha", 0, 1), Newline(2), Word(t"beta", 1, 3))))
+      .assert(_ == CodlStream(1, LazyList(Item(t"alpha", 0, 1), Indent, Item(t"beta", 1, 3))))
       
       test(t"Parse two words on two lines with initial newline"):
         parseText(t"\nalpha\n  beta")
-      .assert(_ == CodlStream(0, LazyList(Word(t"alpha", 1, 0), Newline(2), Word(t"beta", 2, 2))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"alpha", 1, 0), Indent, Item(t"beta", 2, 2))))
       
       test(t"Parse text with whitespace on blank lines"):
         parseText(t"root\n  two\n\n \npeer")
-      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Newline(2), Word(t"two", 1, 2), Newline(-2),
-          Word(t"peer", 4, 0))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Indent, Item(t"two", 1, 2), Blank, Blank,
+          Outdent(1), Item(t"peer", 4, 0))))
         
       test(t"Parse shebang"):
         parseText(t"""|#!/bin/bash
                       |root
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Comment(t"!/bin/bash", 0, 1), Newline(0), Word(t"root", 1, 0))))
+      .assert(_ == CodlStream(0, LazyList(Comment(t"!/bin/bash", 0, 1), Peer, Item(t"root", 1, 0))))
       
       test(t"Parse initial comment"):
         parseText(t"""|# Initial comment
                       |root""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Comment(t"Initial comment", 0, 2), Newline(0), Word(t"root", 1, 0))))
+      .assert(_ == CodlStream(0, LazyList(Comment(t" Initial comment", 0, 1), Peer, Item(t"root", 1, 0))))
       
       test(t"Parse two-line comment"):
         parseText(t"""|# Line 1
                       |# Line 2
                       |root""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Comment(t"Line 1", 0, 2), Newline(0), Comment(t"Line 2", 1, 2),
-          Newline(0), Word(t"root", 2, 0))))
+      .assert(_ == CodlStream(0, LazyList(Comment(t" Line 1", 0, 1), Peer, Comment(t" Line 2", 1, 1),
+          Peer, Item(t"root", 2, 0))))
+      
+      test(t"Parse remark"):
+        parseText(t"""|root # remark""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Comment(t"remark", 0, 7))))
+
+      test(t"Parse non-remark"):
+        parseText(t"""|root #not-a-remark""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Item(t"#not-a-remark", 0, 5))))
+
+      test(t"Parse multi-word remark"):
+        parseText(t"""|root # remark words""".s.stripMargin.show)
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Comment(t"remark words", 0, 7))))
 
       test(t"Parse double indentation"):
         parseText(t"""|root
                       |    child content
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content", 1, 4))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Item(t"child content", 1, 4, true))))
       
       test(t"Parse double indentation then peer"):
-        import logging.stdout
         parseText(t"""|root
                       |    child content
                       |next
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content", 1, 4), Newline(0), Word(t"next", 2, 0))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Item(t"child content", 1, 4, true), Peer, Item(t"next", 2, 0))))
       
       test(t"Parse double indentation then peer with margin"):
-        import logging.stdout
         parseText(t"""| root
                       |     child content
                       | next
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(1, LazyList(Word(t"root", 0, 1), Block(t"child content", 1, 5), Newline(0), Word(t"next", 2, 1))))
+      .assert(_ == CodlStream(1, LazyList(Item(t"root", 0, 1), Item(t"child content", 1, 5, true), Peer, Item(t"next", 2, 1))))
       
       test(t"Parse double indentation then peer with margin and indent"):
-        import logging.stdout
         parseText(t"""| root
                       |     child content
                       |   next
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(1, LazyList(Word(t"root", 0, 1), Block(t"child content", 1, 5), Newline(2), Word(t"next", 2, 3))))
+      .assert(_ == CodlStream(1, LazyList(Item(t"root", 0, 1), Item(t"child content", 1, 5, true), Indent, Item(t"next", 2, 3))))
       
       test(t"Parse multiline content"):
         parseText(t"""|root
                       |    child content
                       |    more
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content\nmore", 1, 4))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Item(t"child content\nmore", 1, 4, true))))
       
       test(t"Parse multiline content then peer"):
         parseText(t"""|root
@@ -268,7 +277,7 @@ object Tests extends Suite(t"CoDL tests"):
                       |    more
                       |next
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content\nmore", 1, 4), Newline(0), Word(t"next", 3, 0))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Item(t"child content\nmore", 1, 4, true), Peer, Item(t"next", 3, 0))))
       
       test(t"Parse multiline content then indent"):
         parseText(t"""|root
@@ -276,7 +285,7 @@ object Tests extends Suite(t"CoDL tests"):
                       |    more
                       |  next
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content\nmore", 1, 4), Newline(2), Word(t"next", 3, 2))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Item(t"child content\nmore", 1, 4, true), Indent, Item(t"next", 3, 2))))
       
       test(t"Parse multiline content then indented comment"):
         parseText(t"""|root
@@ -284,21 +293,21 @@ object Tests extends Suite(t"CoDL tests"):
                       |    more
                       |  # comment
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"child content\nmore", 1, 4), Newline(2), Comment(t"comment", 3, 4))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Item(t"child content\nmore", 1, 4, true), Indent, Comment(t" comment", 3, 3))))
       
       test(t"Parse multiline content including a hash"):
         parseText(t"""|root
                       |    content
                       |    # not a comment
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"content\n# not a comment", 1, 4))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Item(t"content\n# not a comment", 1, 4, true))))
       
       test(t"Parse multiline content including a additional indentation"):
         parseText(t"""|root
                       |    content
                       |     indented
                       |""".s.stripMargin.show)
-      .assert(_ == CodlStream(0, LazyList(Word(t"root", 0, 0), Block(t"content\n indented", 1, 4))))
+      .assert(_ == CodlStream(0, LazyList(Item(t"root", 0, 0), Item(t"content\n indented", 1, 4, true))))
       
       test(t"Surplus indentation"):
         capture:
@@ -364,35 +373,62 @@ object Tests extends Suite(t"CoDL tests"):
       test(t"Access deeper nested param"):
         doc.term().name(0).beta().key
       .assert(_ == t"beta")
-    
-    // suite(t"Untyped parsing tests"):
-    //   test(t"Empty document"):
-    //     Schema.Freeform.parse(t"")
-    //   .assert(_ == Doc())
-      
-    //   test(t"Simplest non-empty document"):
-    //     Schema.Freeform.parse(t"root")
-    //   .assert(_ == Doc(Node(Data(t"root"))))
-      
-    //   test(t"Root peers"):
-    //     Schema.Freeform.parse(t"root\nelement\n")
-    //   .assert(_ == Doc(Node(t"root")(), Node(t"element")()))
 
-    //   test(t"Single child"):
-    //     Schema.Freeform.parse(t"root\n  child")
-    //   .assert(_ == Doc(Node(t"root")(Node(t"child")())))
+    def read(text: Text)(using Log): Doc = Codl.build(Codl.tokenize(StringReader(text.s)))
+    
+    suite(t"Untyped parsing tests"):
+      // test(t"Empty document"):
+      //   read(t"")
+      // .assert(_ == Doc())
       
-    //   test(t"Single child and peer"):
-    //     Schema.Freeform.parse(t"root\n  child\npeer")
-    //   .assert(_ == Doc(Node(t"root")(Node(t"child")()), Node(t"peer")()))
+      test(t"Simplest non-empty document"):
+        read(t"root")
+      .assert(_ == Doc(Node(Data(t"root"))))
       
-    //   test(t"Single child and grandchild"):
-    //     Schema.Freeform.parse(t"root\n  child\n    grandchild")
-    //   .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"grandchild")()))))
+      test(t"Root peers"):
+        read(t"root\nelement\n")
+      .assert(_ == Doc(Node(t"root")(), Node(t"element")()))
+
+      test(t"Single child"):
+        read(t"root\n  child")
+      .assert(_ == Doc(Node(t"root")(Node(t"child")())))
       
-    //   test(t"Single child and grandchild and peer"):
-    //     Schema.Freeform.parse(t"root\n  child\n    grandchild\npeer")
-    //   .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"grandchild")())), Node(t"peer")()))
+      test(t"Single child and peer"):
+        import logging.stdout
+        read(t"root\n  child\npeer")
+      .assert(_ == Doc(Node(t"root")(Node(t"child")()), Node(t"peer")()))
+      
+      test(t"Single child and grandchild"):
+        read(t"root\n  child\n    grandchild")
+      .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"grandchild")()))))
+      
+      test(t"Single child and grandchild and peer"):
+        read(t"root\n  child\n    grandchild\npeer")
+      .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"grandchild")())), Node(t"peer")()))
+      
+      test(t"Peers at multiple levels"):
+        read(t"root\n  child\n    grandchild\n  child\n    grandchild\npeer")
+      .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"grandchild")()), Node(t"child")(Node(t"grandchild")())), Node(t"peer")()))
+    
+      test(t"Data with parameter"):
+        read(t"root param")
+      .assert(_ == Doc(Node(t"root")(Node(t"param")())))
+      
+      test(t"Data with remark"):
+        read(t"root # remark")
+      .assert(_ == Doc(Node(Data(t"root", Nil, Unset), Meta(0, Nil, t"remark"))))
+      
+      test(t"Data after comment"):
+        read(t"# comment\nroot")
+      .assert(_ == Doc(Node(Data(t"root", Nil, Unset), Meta(0, List(t"remark"), Unset))))
+      
+      test(t"Data after two comments"):
+        read(t"# comment 1\n# comment 2\nroot")
+      .assert(_ == Doc(Node(Data(t"root", Nil, Unset), Meta(0, List(t" comment 1", t" comment 2"), Unset))))
+      
+      test(t"Data with multiple parameters"):
+        read(t"root param1 param2")
+      .assert(_ == Doc(Node(t"root")(Node(t"param1")(), Node(t"param2")())))
       
     //   val schema = Schema(ListMap(
     //                  t"root" -> Schema(ListMap(

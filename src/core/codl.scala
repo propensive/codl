@@ -111,8 +111,6 @@ object CodlParseError:
     case UnevenIndent(initial: Int, indent: Int)
     case IndentAfterComment, SurplusIndent, InsufficientIndent
 
-export CodlParseError.Issue.{UnevenIndent, IndentAfterComment, SurplusIndent, InsufficientIndent}
-
 case class BinaryError(expectation: Text, pos: Int)
 extends Exception(s"expected $expectation at position $pos")
 
@@ -141,120 +139,241 @@ case class MissingIndexValueError(index: Int)
 extends Error(err"the index $index does not exist in the CoDL document")
 
 enum Token:
-  case Newline(n: Int)
+  case Indent, Peer
+  case Outdent(n: Int)
   case Tab(n: Int)
-  case Word(text: Text, line: Int, col: Int)
-  case Block(text: Text, line: Int, col: Int)
+  case Item(text: Text, line: Int, col: Int, block: Boolean = false)
   case Comment(text: Text, line: Int, col: Int)
-  case Remark(text: Text, line: Int, col: Int)
-  case Blank(count: Int)
+  case Blank
 
   override def toString(): String = this match
-    case Word(t, l, c)    => (t"[$t:$l:$c]").s
-    case Tab(n)           => t"==>".s
-    case Newline(n)       => (t"{"+(t"-"*(-n))+(t"+"*n)+t"}").s
-    case Block(t, l, c)   => t"#[bl[${t}]]#".s
+    case Item(t, l, c, b) => s"[$t:$l:$c:$b]"
+    case Tab(n)           => "==>"
+    case Indent           => "-->"
+    case Peer             => "<->"
+    case Outdent(n)       => s"<-${n}-"
     case Comment(t, l, c) => t"~$t:$l:$c~".s
-    case Remark(t, l, c)  => t"^$t:$l:$c^".s
-    case Blank(c)         => (t"\\n"*c).s
+    case Blank            => "[    ]"
 
 case class CodlStream(margin: Int, tokens: LazyList[Token]):
   override def toString: String = s"(${margin}) ${tokens.mkString(" · ")}"
 
-def tokenize(in: Reader)(using Log): CodlStream throws CodlParseError =
-  val reader = PositionReader(in)
+object Codl:
+  def build(stream: CodlStream)(using Log): Doc =
+    @tailrec
+    def recur(tokens: LazyList[Token] = stream.tokens, stack: List[List[Node]], lines: Int = 0): Doc =
+      tokens match
+        case head #:: tail => head match
+          case Token.Peer => stack match
+            case (Node(Unset, meta) :: children) :: stack => recur(tail, (Node(Unset, meta) :: children) :: stack)
+            case children :: stack                        => recur(tail, (Node() :: children) :: stack)
+            case Nil                                      => throw Mistake("Stack is badly formed")
+          
+          case Token.Indent =>
+            recur(tail, List(Node()) :: stack)
+          
+          case Token.Outdent(n) => stack match
+            case children :: Nil =>
+              recur(LazyList(), stack)
+            
+            case children :: (Node(data: Data, meta) :: rest) :: stack =>
+              val next = if n == 1 then Token.Peer else Token.Outdent(n - 1)
+              recur(next #:: tail, (Node(data.copy(children = children.reverse.map(_.close)), meta) :: rest) :: stack)
 
-  enum State:
-    case Word, Hash, Comment, Indent, Space, Tab, Margin
-  
-  import State.*
-
-  @tailrec
-  def cue(): Character = reader.next() match
-    case ch if ch.char == '\n' || ch.char == ' ' => cue()
-    case ch                                      => ch
-  
-  val first: Character = cue()
-  val margin: Int = first.column
-
-  def istream(char: Character, state: State = Indent, indent: Int = margin): LazyList[Token] =
-    stream(char, state, indent)
-  
-  @tailrec
-  def stream(char: Character, state: State = Indent, indent: Int = margin): LazyList[Token] =
-    Log.fine(t"stream('${char.char}', $state, $indent)")
-    inline def recur(state: State, indent: Int = indent): LazyList[Token] = stream(reader.next(), state, indent)
-    inline def irecur(state: State, indent: Int = indent): LazyList[Token] = istream(reader.next(), state, indent)
-    inline def diff: Int = char.column - indent
-
-    def token(): Token = state match
-      case Comment => Token.Comment(reader.get(), reader.start()(0), reader.start()(1))
-      case Margin  => Token.Block(reader.get().drop(1, Rtl), reader.start()(0), reader.start()(1))
-      case Word    => Token.Word(reader.get(), reader.start()(0), reader.start()(1))
-      case _       => ???
-
-    def put(next: State, stop: Boolean = false): LazyList[Token] = token() #:: irecur(next)
-    
-    inline def consume(next: State): LazyList[Token] =
-      reader.put(char)
-      recur(next)
-
-    inline def block(): LazyList[Token] =
-      if char.char != ' ' && diff < 4 then token() #:: istream(char)
-      else
-        if char.char != ' ' || diff >= 4 then reader.put(char)
-        recur(Margin)
-    
-    inline def newline(next: State): LazyList[Token] =
-      if diff > 4 then throw CodlParseError(char.line, char.column, CodlParseError.Issue.SurplusIndent)
-      if diff%2 != 0 then throw CodlParseError(char.line, char.column, CodlParseError.Issue.UnevenIndent(margin, char.column))
-      Token.Newline(diff) #:: irecur(next, indent = char.column)
-
-    char.char match
-      case _ if char == End => state match
-        case Indent    => LazyList()
-        case Space     => LazyList()
-        case Tab       => LazyList()
-        case Hash      => LazyList()
-        case Comment   => LazyList(token())
-        case Word      => LazyList(token())
-        case Margin    => LazyList(token())
-      
-      case '\n' => state match
-        case Word | Comment => put(Indent)
-        case Margin         => block()
-        case _              => recur(Indent)
-      
-      case ' ' => state match
-        case Space | Tab => recur(Tab)
-        case Indent      => recur(Indent)
-        case Word        => put(Space)
-        case Comment     => consume(Comment)
-        case Margin      => block()
-        case Hash        => recur(Comment)
-      
-      case '#' => state match
-        case Space     => recur(Comment)
-        case Tab       => recur(Comment)
-        case Word      => consume(Word)
-        case Indent    => if diff == 4 then recur(Margin) else newline(Hash)
-        case Comment   => consume(Comment)
-        case Margin    => block()
-        case Hash      => ??? //stream(next(), Comment, indent)
-      
-      case ch => state match
-        case Space   => consume(Word)
-        case Tab     => consume(Word)
-        case Word    => consume(Word)
-        case Comment => consume(Comment)
-        case Indent  => reader.put(char); if diff == 4 then recur(Margin) else newline(Word)
-        case Margin  => block()
+            case _ =>
+              throw Mistake("Stack is badly formed")
+          
+          case Token.Tab(n) =>
+            recur(tail, stack, lines)
+          
+          case Token.Blank =>
+            recur(tail, stack, lines + 1)
+          
+          case Token.Item(word, line, col, block) => stack match
+            case (node :: rest) :: stack => node match
+              case Node(Unset, meta) =>
+                recur(tail, (Node(Data(word)) :: rest) :: stack, lines)
+              
+              case Node(Data(key, children, layout), meta) =>
+                recur(tail, (Node(Data(key, Node(Data(word)) :: children, layout), meta) :: rest) :: stack, lines)
+            
+            case _ => throw Mistake("Stack is badly formed")
+          
+          case Token.Comment(commentText, _, _) =>
+            recur(tail, stack, lines)
         
-        case Hash => char.char match
-          case '!' if first.line == 0 && first.column == 1 => consume(Comment)
-          case ch                                          => consume(Comment)
+        case empty => stack match
+          case children :: Nil => Doc(children.reverse.map(_.close), stream.margin)
+          case _               => recur(LazyList(Token.Outdent(stack.length)), stack, lines)
+    
+    recur(stream.tokens, List(List(Node())))
 
-  CodlStream(first.column, stream(first).tail)
+  def tokenize(in: Reader)(using Log): CodlStream throws CodlParseError =
+    val reader = PositionReader(in)
+
+    enum State:
+      case Word, Hash, Comment, Indent, Space, Tab, Margin
+    
+    import State.*
+
+    @tailrec
+    def cue(): Character = reader.next() match
+      case ch if ch.char == '\n' || ch.char == ' ' => cue()
+      case ch                                      => ch
+    
+    val first: Character = cue()
+    val margin: Int = first.column
+
+    def istream(char: Character, state: State = Indent, indent: Int = margin): LazyList[Token] =
+      stream(char, state, indent)
+    
+    @tailrec
+    def stream(char: Character, state: State = Indent, indent: Int = margin): LazyList[Token] =
+      Log.fine(t"stream('${char.char}', $state, $indent)")
+      inline def recur(state: State, indent: Int = indent): LazyList[Token] = stream(reader.next(), state, indent)
+      inline def irecur(state: State, indent: Int = indent): LazyList[Token] = istream(reader.next(), state, indent)
+      inline def diff: Int = char.column - indent
+
+      def token(): Token = state match
+        case Comment => Token.Comment(reader.get(), reader.start()(0), reader.start()(1))
+        case Margin  => Token.Item(reader.get().drop(1, Rtl), reader.start()(0), reader.start()(1), true)
+        case Word    => Token.Item(reader.get(), reader.start()(0), reader.start()(1), false)
+        case _       => ???
+
+      def put(next: State, stop: Boolean = false): LazyList[Token] = token() #:: irecur(next)
+      
+      inline def consume(next: State): LazyList[Token] =
+        reader.put(char)
+        recur(next)
+
+      inline def block(): LazyList[Token] =
+        if diff >= 4 then consume(Margin)
+        else if char.char == ' ' then recur(Margin)
+        else token() #:: istream(char)
+        
+      inline def newline(next: State): LazyList[Token] =
+        if diff > 4 then throw CodlParseError(char.line, char.column, SurplusIndent)
+        else if diff%2 != 0 then throw CodlParseError(char.line, char.column, UnevenIndent(margin, char.column))
+        else diff match
+          case 2  => Token.Indent #:: irecur(next, indent = char.column)
+          case 0  => Token.Peer #:: irecur(next, indent = char.column)
+          case n => Token.Outdent(-diff/2) #:: irecur(next, indent = char.column)
+
+      char.char match
+        case _ if char == End => state match
+          case Indent | Space | Tab | Hash => LazyList()
+          case Comment | Word | Margin     => LazyList(token())
+        
+        case '\n' => state match
+          case Word | Comment       => put(Indent)
+          case Margin               => block()
+          case Indent | Space | Tab => Token.Blank #:: irecur(Indent)
+          case _                    => recur(Indent)
+        
+        case ' ' => state match
+          case Space | Tab => recur(Tab)
+          case Indent      => recur(Indent)
+          case Word        => put(Space)
+          case Comment     => consume(Comment)
+          case Margin      => block()
+          case Hash        => reader.get(); recur(Comment)
+        
+        case '#' => state match
+          case Space | Tab    => consume(Hash)
+          case Word | Comment => consume(state)
+          case Indent         => if diff == 4 then recur(Margin) else newline(Comment)
+          case Margin         => block()
+          case Hash           => consume(Word)
+        
+        case ch => state match
+          case Space | Tab | Word => consume(Word)
+          case Comment            => consume(Comment)
+          case Indent             => reader.put(char); if diff == 4 then recur(Margin) else newline(Word)
+          case Margin             => block()
+          
+          case Hash => char.char match
+            case '!' if first.line == 0 && first.column == 1 => consume(Comment)
+            case ch                                          => consume(Word)
+
+    CodlStream(first.column, stream(first).drop(1))
+
+object Doc:
+  def apply(node: Node*): Doc = Doc(node.to(List), 0)
+
+case class Doc(children: List[Node], margin: Int) extends Indexed:
+  override def toString: String = s"[[${children.mkString(" ")}]]"
+
+case class Data(key: Text, children: List[Node] = Nil, layout: Maybe[Layout] = Unset) extends Indexed
+case class Meta(blank: Int = 0, comments: List[Text] = Nil, remark: Maybe[Text] = Unset/*, grid: Grid*/)
+case class Layout(params: Int, multiline: Boolean)
+
+object Node:
+  given DebugString[Node] = _.data.option.fold(t"!") { data => t"${data.key}[${data.children.map(_.debug).join(t",")}]" }
+  val empty: Node = Node()
+  def apply(key: Text)(child: Node*): Node = Node(Data(key, child.to(List)))
+
+case class Node(data: Maybe[Data] = Unset, meta: Maybe[Meta] = Unset) extends Dynamic:
+  def empty: Boolean = data == Unset && meta == Unset
+
+  def selectDynamic(key: String): List[Data] throws MissingValueError =
+    data.option.getOrElse(throw MissingValueError(key.show)).selectDynamic(key)
+  
+  def applyDynamic(key: String)(idx: Int = 0): Data throws MissingValueError = selectDynamic(key)(idx)
+
+  // override def toString(): String = data match
+  //   case Unset                  => "<|>"
+  //   case Data(key, Nil, _)      => s"$key"
+  //   case Data(key, children, _) => s"$key[${children.mkString(" ")}]"
+
+  def close: Node = data match
+    case Unset                       => Node(Unset, meta)
+    case Data(key, children, layout) => Node(Data(key, children.reverse, layout), meta)
+
+// // FIXME: Remove this later
+// extension [K, V](map: Map[K, List[V]])
+//   def plus(key: K, value: V): Map[K, List[V]] =
+//     map.updated(key, map.get(key).fold(List(value))(value :: _))
+
+trait Indexed extends Dynamic:
+  def children: List[Node]
+  private lazy val index: Map[Text, List[Data]] =
+    children.map(_.data).sift[Data].foldLeft(Map[Text, List[Data]]()): (acc, data) =>
+      acc.plus(data.key, data)
+    .view.mapValues(_.reverse).to(Map)
+
+  def apply(index: Int): Node throws MissingIndexValueError =
+    try children(index) catch case err: IndexOutOfBoundsException => throw MissingIndexValueError(index)
+
+  def selectDynamic(key: String): List[Data] throws MissingValueError =
+    index.get(key.show).getOrElse(throw MissingValueError(key.show))
+  
+  def applyDynamic(key: String)(idx: Int = 0): Data throws MissingValueError = selectDynamic(key)(idx)
+  
+object Schema:
+  object Freeform extends Schema(ListMap(Unset -> Schema(ListMap(), Multiplicity.Many)), Multiplicity.Many)
+
+case class Schema(subschemas: ListMap[Maybe[Text], Schema] = ListMap(), multiplicity: Multiplicity = Multiplicity.One):
+  // def parse(text: Text)(using Log): Doc throws AggregateError | CodlParseError | CodlValidationError =
+  //   Codl.parse(StringReader(text.s), subschemas)
+  
+  def apply(key: Maybe[Text]): Schema = subschemas.get(key).getOrElse(Schema.Freeform)
+
+enum Multiplicity:
+  case One, AtLeastOne, Optional, Many, Joined, Unique
+
+  def required: Boolean = this match
+    case One | Unique | AtLeastOne => true
+    case Optional | Many | Joined  => false
+
+  def variadic: Boolean = this match
+    case Joined | AtLeastOne | Many => true
+    case Optional | Unique | One    => false
+  
+  def repeatable: Boolean = this match
+    case AtLeastOne | Many => true
+    case _                 => false
+  
+  def unique: Boolean = !repeatable
 
 
   // def indirect(cur: Character, state: State, indent: Int)(using Log)
@@ -510,80 +629,6 @@ def tokenize(in: Reader)(using Log): CodlStream throws CodlParseError =
           
     
 //     trees(State.Start, Tokenizer(in).stream(), List(Node(Data(t""))), -1, -1, 0, List(schema))
-
-
-object Node:
-  given DebugString[Node] = _.data.option.fold(t"!") { data => t"${data.key}[${data.children.map(_.debug).join(t",")}]" }
-  val empty: Node = Node()
-  def apply(key: Text)(child: Node*): Node = Node(Data(key, child.to(List)))
-
-case class Node(data: Maybe[Data] = Unset, meta: Maybe[Meta] = Unset) extends Dynamic:
-  def add(node: Data): Node = copy(data = data.otherwise(???).copy())
-  def empty: Boolean = data == Unset && meta == Unset
-
-  def close: Node = data match
-    case Unset                       => Node(Unset, meta)
-    case Data(key, children, layout) => Node(Data(key, children.reverse, layout), meta)
-  
-  def selectDynamic(key: String): List[Data] throws MissingValueError =
-    data.option.getOrElse(throw MissingValueError(key.show)).selectDynamic(key)
-  
-  def applyDynamic(key: String)(idx: Int = 0): Data throws MissingValueError = selectDynamic(key)(idx)
-
-// // FIXME: Remove this later
-// extension [K, V](map: Map[K, List[V]])
-//   def plus(key: K, value: V): Map[K, List[V]] =
-//     map.updated(key, map.get(key).fold(List(value))(value :: _))
-
-trait Indexed extends Dynamic:
-  def children: List[Node]
-  private lazy val index: Map[Text, List[Data]] =
-    children.map(_.data).sift[Data].foldLeft(Map[Text, List[Data]]()): (acc, data) =>
-      acc.plus(data.key, data)
-    .view.mapValues(_.reverse).to(Map)
-
-  def apply(index: Int): Node throws MissingIndexValueError =
-    try children(index) catch case err: IndexOutOfBoundsException => throw MissingIndexValueError(index)
-
-  def selectDynamic(key: String): List[Data] throws MissingValueError =
-    index.get(key.show).getOrElse(throw MissingValueError(key.show))
-  
-  def applyDynamic(key: String)(idx: Int = 0): Data throws MissingValueError = selectDynamic(key)(idx)
-  
-case class Data(key: Text, children: List[Node] = Nil, layout: Maybe[Layout] = Unset) extends Indexed
-case class Meta(blank: Int, comments: List[Text], remark: Maybe[Text]/*, grid: Grid*/)
-case class Layout(params: Int, multiline: Boolean)
-
-object Doc:
-  def apply(node: Node*): Doc = Doc(node.to(List), 0)
-
-case class Doc(children: List[Node], margin: Int) extends Indexed
-
-object Schema:
-  object Freeform extends Schema(ListMap(Unset -> Schema(ListMap(), Multiplicity.Many)), Multiplicity.Many)
-
-case class Schema(subschemas: ListMap[Maybe[Text], Schema] = ListMap(), multiplicity: Multiplicity = Multiplicity.One):
-  // def parse(text: Text)(using Log): Doc throws AggregateError | CodlParseError | CodlValidationError =
-  //   Codl.parse(StringReader(text.s), subschemas)
-  
-  def apply(key: Maybe[Text]): Schema = subschemas.get(key).getOrElse(Schema.Freeform)
-
-enum Multiplicity:
-  case One, AtLeastOne, Optional, Many, Joined, Unique
-
-  def required: Boolean = this match
-    case One | Unique | AtLeastOne => true
-    case Optional | Many | Joined  => false
-
-  def variadic: Boolean = this match
-    case Joined | AtLeastOne | Many => true
-    case Optional | Unique | One    => false
-  
-  def repeatable: Boolean = this match
-    case AtLeastOne | Many => true
-    case _                 => false
-  
-  def unique: Boolean = !repeatable
 
 // enum Tweak:
 //   case HalfIndent, HalfOutdent
