@@ -25,36 +25,30 @@ enum Token:
     case Blank            => "[    ]"
 
 
-case class Proto(data: Maybe[PData] = Unset, meta: Maybe[Meta] = Unset):
-  def close: Node = data.mfold(Node(Unset, meta)):
-    case PData(key, children, layout, schema) =>
-      Node(Data(key, children.reverse, layout, schema), meta.mmap { m => m.copy(comments = m.comments.reverse) })
+case class Proto(key: Maybe[Text] = Unset, children: List[Node] = Nil, meta: Maybe[Meta] = Unset,
+                     schema: Schema = Schema.Free, params: Int = 0, multiline: Boolean = false):
+  def close: Node = key.mfold(Node(Unset, meta)):
+    case key: Text =>
+      Node(Data(key, IArray.from(children.reverse), Layout(params, multiline), schema), meta.mmap { m => m.copy(comments = m.comments.reverse) })
 
-  def schema: Maybe[Schema] = data.mmap(_.schema)
-  def has(key: Maybe[Text]): Boolean = data.mmap(_.has(key)).otherwise(false)
-  def key: Maybe[Text] = data.mmap(_.key)
-
-case class PData(key: Text, children: List[Node] = Nil, layout: Layout = Layout.empty, schema: Schema = Schema.Free):
   def has(key: Maybe[Text]): Boolean = dictionary.contains(key)
   
   // FIXME: These need to go
-
-  def paramCount: Int = layout.mfold(0)(_.params)
   private lazy val array: IArray[Data] = IArray.from(children.map(_.data).sift[Data])
-  private lazy val dictionary: Map[Maybe[Text], List[Data]] =
-    val data = children.map(_.data).sift[Data]
+  
+  private def dictionary: Map[Maybe[Text], List[Data]] =
+    val ddata = children.map(_.data).sift[Data]
     
     val init: Map[Maybe[Text], List[Data]] = schema match
       case schema@Struct(_, _) =>
-        array.take(paramCount).zipWithIndex.foldLeft(Map[Maybe[Text], List[Data]]()):
+        array.take(params).zipWithIndex.foldLeft(Map[Maybe[Text], List[Data]]()):
           case (acc, (param, idx)) => acc.plus(schema.param(idx).mmap(_.key), param)
       case Field(_, _) =>
         Map()
     
-    data.drop(paramCount).foldLeft(init): (acc, data) =>
+    ddata.drop(params).foldLeft(init): (acc, data) =>
       acc.plus(data.key, data)
     .view.mapValues(_.reverse).to(Map)
-
 
 object Codl:
 
@@ -76,29 +70,22 @@ object Codl:
       tokens match
         case head #:: tail => head match
           case Token.Peer => focus match
-            case Proto(Unset, meta) =>
-              go(focus = Proto(Unset, meta.otherwise(if lines == 0 then Unset else Meta(lines))))
+            case Proto(Unset, Nil, meta, _, _, _) =>
+              go(focus = Proto(Unset, Nil, meta.otherwise(if lines == 0 then Unset else Meta(lines))))
             
-            case Proto(data: PData, meta) =>
-              val params = focus.data.mfold(0)(_.children.length)
-              val layout2 = focus.data.mmap(_.layout).mfold(Layout(params, false))(_.copy(params = params))
-              val data2 = focus.data.mmap(_.copy(layout = layout2))
-              go(focus = Proto(), peers = focus.copy(data = data2).close :: peers)
+            case Proto(key: Text, children, meta, sch, params, multiline) =>
+              go(focus = Proto(), peers = focus.copy(schema = sch, params = children.length).close :: peers)
           
           case Token.Indent =>
-            val params = focus.data.mfold(0)(_.children.length)
-            val layout2 = focus.data.mmap(_.layout).mfold(Layout(params, false))(_.copy(params = params))
-            val data2 = focus.data.mmap(_.copy(layout = layout2))
-            
-            go(focus = Proto(), peers = Nil, stack = (focus.copy(data = data2) -> peers) :: stack)
+            go(focus = Proto(), peers = Nil, stack = (focus -> peers) :: stack)
           
           case Token.Outdent(n) => stack match
             case Nil =>
               go(LazyList())
             
-            case (Proto(data: PData, meta) -> rest) :: stack2 =>
+            case (Proto(key: Text, _, _, _, _, _) -> rest) :: stack2 =>
               val next = if n == 1 then Token.Peer else Token.Outdent(n - 1)
-              val focus2 = Proto(data.copy(children = (focus.close :: peers)), meta)
+              val focus2 = stack.head.head.copy(children = focus.close :: peers)
               
               focus.schema.mfold(Nil)(_.requiredKeys).foreach: key =>
                 if !focus.has(key) then throw CodlValidationError(focus.key, MissingKey(key))
@@ -116,48 +103,44 @@ object Codl:
             val meta2: Maybe[Meta] = focus.meta.otherwise(if lines == 0 then Unset else Meta(blank = lines))
             
             focus match
-              case Proto(Unset, meta) =>
+              case Proto(Unset, _, _, _, _, _) =>
                 val fschema = if schema == Schema.Free then schema else schema(word).otherwise:
                   throw CodlValidationError(word, InvalidKey(word))
 
                 if fschema.unique && peers.exists(_.data.mmap(_.key) == word)
                 then throw CodlValidationError(word, DuplicateKey(word))
                 
-                go(focus = Proto(PData(word, Nil, Layout(0, false), schema = fschema), meta2), lines = 0)
+                go(focus = Proto(word, Nil, meta2, fschema), lines = 0)
               
-              case Proto(PData(key, children, layout, field@Field(arity, _)), meta) =>
-                val data2 = PData(word, Nil, Layout.empty, Schema.Free)
-                val layout2 = layout.copy(params = layout.params + 1)
-                val focus2 = Proto(PData(key, Proto(data2).close :: children, layout2, field), meta2)
+              case Proto(key: Text, children, _, field@Field(_, _), params, _) =>
+                val children2 = Proto(word).close :: children
+                val focus2 = focus.copy(children = children2, meta = meta2, schema = field, params = params + 1)
                 
                 go(focus = focus2, lines = 0)
                   
-              case Proto(PData(key, children, layout, Schema.Free), meta) =>
-                val data2 = PData(word, Nil, Layout.empty, Schema.Free)
-                val layout2 = layout.copy(params = layout.params + 1)
-                val focus2 = Proto(PData(key, Proto(data2).close :: children, layout2, Schema.Free), meta2)
+              case Proto(key: Text, children, meta, Schema.Free, params, multiline) =>
+                val focus2 = Proto(key, Proto(word).close :: children, meta2, Schema.Free, params + 1, multiline)
                     
                 go(focus = focus2, lines = 0)
               
-              case Proto(PData(key, children, layout, schema@Struct(_, _)), meta) =>
+              case Proto(key: Text, children, meta, schema@Struct(_, _), params, multiline) =>
                 schema.param(children.length) match
                   case entry: Schema.Entry =>
-                    val data2 = PData(word, Nil, Layout.empty, entry.schema)
-                    val layout2 = layout.copy(params = layout.params + 1)
-                    val focus2 = Proto(PData(key, Proto(data2).close :: children, layout2, schema), meta2)
+                    val children2 = Proto(word, schema = entry.schema).close :: children
+                    val focus2 = Proto(key, children2, meta2, schema, params + 1, multiline)
                     
                     go(focus = focus2, lines = 0)
                   case Unset =>
                     throw CodlValidationError(word, SurplusParams(key))
           
           case Token.Comment(txt, _, _) => focus match
-            case Proto(Unset, meta) =>
-              val meta2 = meta.otherwise(Meta()).copy(blank = lines)
+            case Proto(Unset, _, meta, schema, _, _) =>
+              val meta2 = meta.otherwise(Meta()).copy(blank = lines, comments = txt :: meta.mfold(Nil)(_.comments))
               
-              go(focus = Proto(Unset, meta2.copy(comments = txt :: meta2.comments)))
+              go(focus = Proto(Unset, Nil, meta2, schema))
             
-            case Proto(data: PData, meta) =>
-              go(focus = Proto(data, meta.otherwise(Meta()).copy(remark = txt, blank = lines)))
+            case Proto(data: Text, children, meta, schema, params, multiline) =>
+              go(focus = Proto(data, children, meta.otherwise(Meta()).copy(remark = txt, blank = lines), schema, params, multiline))
 
 
         case empty => stack match
@@ -165,7 +148,7 @@ object Codl:
             focus.schema.mfold(Nil)(_.requiredKeys).foreach: key =>
               if !focus.has(key) then throw CodlValidationError(focus.key, MissingKey(key))
             
-            Doc((focus.close :: peers).reverse, baseSchema, margin)
+            Doc(IArray.from((focus.close :: peers).reverse), baseSchema, margin)
           case _   => go(LazyList(Token.Outdent(stack.length + 1)))
     
     if stream.isEmpty then Doc()

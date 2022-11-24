@@ -16,7 +16,7 @@ object Bin:
     out.write("\u00b1\u00c0\u00d1")
     write(out, doc.schema, doc.children)
 
-  private def write(out: ji.Writer, schema: Schema, nodes: List[Node]): Unit =
+  private def write(out: ji.Writer, schema: Schema, nodes: IArray[Node]): Unit =
     val dataNodes = nodes.map(_.data).sift[Data]
     write(out, dataNodes.length)
     
@@ -39,16 +39,17 @@ object Bin:
         schema match
           case Field(_, _) =>
             val key = readText(reader)
-            Node(Data(key, Nil, Layout.empty, Schema.Free))
+            Node(Data(key, IArray(), Layout.empty, Schema.Free))
+          
           case schema =>
             val subschema = readNumber(reader) match
               case 0  => Schema.Entry(Unset, Schema.Free)
               case idx => schema.entry(idx - 1)
 
             val key = subschema.key.option.getOrElse(throw BinaryError(t"unexpected key", 0))
-            Node(Data(key, recur(subschema.schema), Layout.empty, subschema.schema))
+            Node(Data(key, IArray.from(recur(subschema.schema)), Layout.empty, subschema.schema))
     
-    Doc(recur(schema), schema, 0)
+    Doc(IArray.from(recur(schema)), schema, 0)
 
   private def readNumber(in: ji.Reader): Int = in.read - 32
 

@@ -435,12 +435,12 @@ object Tests extends Suite(t"CoDL tests"):
       
       test(t"Comment on child"):
         read(t"root\n  # comment\n  child").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child"), Meta(0, List(t" comment"),
+      .assert(_ == Doc(Node(Data(t"root", IArray(Node(Data(t"child"), Meta(0, List(t" comment"),
           Unset)))))))
       
       test(t"Comment and blank line on child"):
         read(t"root\n\n  # comment\n  child").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child"), Meta(1, List(t" comment"),
+      .assert(_ == Doc(Node(Data(t"root", IArray(Node(Data(t"child"), Meta(1, List(t" comment"),
           Unset)))))))
       
       test(t"Data with multiple parameters"):
@@ -449,30 +449,30 @@ object Tests extends Suite(t"CoDL tests"):
       
       test(t"Blank line before child"):
         read(t"root\n\n  child").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child"), Meta(1, Nil)))))))
+      .assert(_ == Doc(Node(Data(t"root", IArray(Node(Data(t"child"), Meta(1, Nil)))))))
       
       test(t"Two blank lines before child"):
         read(t"root\n\n \n  child").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child", List()), Meta(2, Nil, Unset)))))))
+      .assert(_ == Doc(Node(Data(t"root", IArray(Node(Data(t"child", IArray()), Meta(2, Nil, Unset)))))))
       
       test(t"Data with multiple parameters, remark and comment"):
         read(t"# comment\nroot param1 param2 # remark").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(t"param1")(), Node(t"param2")())), Meta(0,
+      .assert(_ == Doc(Node(Data(t"root", IArray(Node(t"param1")(), Node(t"param2")())), Meta(0,
           List(t" comment"), t"remark"))))
       
       test(t"Data with multiple parameters, remark, comment and peer"):
         read(t"# comment\nroot param1 param2 # remark\npeer").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(t"param1")(), Node(t"param2")())), Meta(0,
+      .assert(_ == Doc(Node(Data(t"root", IArray(Node(t"param1")(), Node(t"param2")())), Meta(0,
           List(t" comment"), t"remark")), Node(t"peer")()))
       
       test(t"Comment on blank node"):
         read(t"# comment\n\nroot").untyped
-      .assert(_ == Doc(Node(Unset, Meta(0, List(t" comment"), Unset)), Node(Data(t"root", Nil), Meta(1,
+      .assert(_ == Doc(Node(Unset, Meta(0, List(t" comment"), Unset)), Node(Data(t"root"), Meta(1,
           Nil, Unset))))
       
       test(t"Remark after blank line"):
         read(t"root\n\npeer # remark").untyped
-      .assert(_ == Doc(Node(t"root")(), Node(Data(t"peer", Nil), Meta(0, Nil, t"remark"))))
+      .assert(_ == Doc(Node(t"root")(), Node(Data(t"peer"), Meta(0, Nil, t"remark"))))
       
       test(t"Long item"):
         read(t"root\n    one two\n").wiped
@@ -568,7 +568,7 @@ object Tests extends Suite(t"CoDL tests"):
       
       test(t"Present required node does not throw exception"):
         requiredChild.parse(t"root\n  child").untyped.root().child()
-      .assert(_ == Data(t"child", Nil))
+      .assert(_ == Data(t"child"))
       
       val repeatableChild = Struct(
                               t"root" -> Struct(
@@ -622,7 +622,7 @@ object Tests extends Suite(t"CoDL tests"):
       
       test(t"Access parameters by name"):
         childWithTwoParams(One, One).parse(t"root\n  child first second").root().child().beta()
-      .assert(_ == Data(t"second", Nil, schema = Field(One)))
+      .assert(_ == Data(t"second", IArray(), schema = Field(One)))
 
       test(t"Surplus parameters"):
         capture(childWithTwoParams(One, One).parse(t"root\n  child one two three"))
