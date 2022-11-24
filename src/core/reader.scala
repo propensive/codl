@@ -1,4 +1,4 @@
-package codl
+package cellulose
 
 import rudiments.*
 import gossamer.*

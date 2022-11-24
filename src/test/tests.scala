@@ -1,4 +1,4 @@
-package codl
+package cellulose
 
 import probably.*
 import gossamer.*
@@ -8,7 +8,7 @@ import eucalyptus.*
 import tetromino.*
 import parasitism.*, threading.platform
 
-import java.io.StringReader
+import java.io as ji
 
 import unsafeExceptions.canThrowAny
 
@@ -23,7 +23,7 @@ object Tests extends Suite(t"CoDL tests"):
     import Arity.*
 
     suite(t"Reader tests"):
-      def interpret(text: Text)(using Log): PositionReader = PositionReader(StringReader(text.s))
+      def interpret(text: Text)(using Log): PositionReader = PositionReader(ji.StringReader(text.s))
 
       test(t"Character can store line"):
         Character('©', 123, 456).line
@@ -168,7 +168,7 @@ object Tests extends Suite(t"CoDL tests"):
         case _: IllegalStateException =>
 
     suite(t"Tokenizer tests"):
-      def parseText(text: Text)(using Log): (Int, LazyList[Token]) = Codl.tokenize(StringReader(text.s))
+      def parseText(text: Text)(using Log): (Int, LazyList[Token]) = Codl.tokenize(ji.StringReader(text.s))
 
       test(t"Parse two words with single space"):
         parseText(t"alpha beta")
@@ -381,7 +381,7 @@ object Tests extends Suite(t"CoDL tests"):
         doc.term().name()(1)
       .assert(_ == Data(t"beta"))
 
-    def read(text: Text)(using Log): Doc = Codl.parse(StringReader(text.s))
+    def read(text: Text)(using Log): Doc = Codl.parse(ji.StringReader(text.s))
     
     suite(t"Untyped parsing tests"):
       test(t"Empty document"):
@@ -423,25 +423,25 @@ object Tests extends Suite(t"CoDL tests"):
       
       test(t"Data with remark"):
         read(t"root # remark").untyped
-      .assert(_ == Doc(Node(Data(t"root", Nil, Unset), Meta(0, Nil, t"remark"))))
+      .assert(_ == Doc(Node(Data(t"root"), Meta(0, Nil, t"remark"))))
       
       test(t"Data after comment"):
         read(t"# comment\nroot").untyped
-      .assert(_ == Doc(Node(Data(t"root", Nil, Unset), Meta(0, List(t" comment"), Unset))))
+      .assert(_ == Doc(Node(Data(t"root"), Meta(0, List(t" comment"), Unset))))
       
       test(t"Data after two comments"):
         read(t"# comment 1\n# comment 2\nroot").untyped
-      .assert(_ == Doc(Node(Data(t"root", Nil, Unset), Meta(0, List(t" comment 1", t" comment 2"), Unset))))
+      .assert(_ == Doc(Node(Data(t"root"), Meta(0, List(t" comment 1", t" comment 2"), Unset))))
       
       test(t"Comment on child"):
         read(t"root\n  # comment\n  child").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child", Nil, Unset), Meta(0, List(t" comment"),
-          Unset))), Unset))))
+      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child"), Meta(0, List(t" comment"),
+          Unset)))))))
       
       test(t"Comment and blank line on child"):
         read(t"root\n\n  # comment\n  child").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child", Nil, Unset), Meta(1, List(t" comment"),
-          Unset))), Unset))))
+      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child"), Meta(1, List(t" comment"),
+          Unset)))))))
       
       test(t"Data with multiple parameters"):
         read(t"root param1 param2").wiped
@@ -449,32 +449,30 @@ object Tests extends Suite(t"CoDL tests"):
       
       test(t"Blank line before child"):
         read(t"root\n\n  child").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child", List(), Unset), Meta(1, Nil, Unset))),
-          Unset))))
+      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child"), Meta(1, Nil)))))))
       
       test(t"Two blank lines before child"):
         read(t"root\n\n \n  child").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child", List(), Unset), Meta(2, Nil, Unset))),
-          Unset))))
+      .assert(_ == Doc(Node(Data(t"root", List(Node(Data(t"child", List()), Meta(2, Nil, Unset)))))))
       
       test(t"Data with multiple parameters, remark and comment"):
         read(t"# comment\nroot param1 param2 # remark").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(t"param1")(), Node(t"param2")()), Unset), Meta(0,
+      .assert(_ == Doc(Node(Data(t"root", List(Node(t"param1")(), Node(t"param2")())), Meta(0,
           List(t" comment"), t"remark"))))
       
       test(t"Data with multiple parameters, remark, comment and peer"):
         read(t"# comment\nroot param1 param2 # remark\npeer").untyped
-      .assert(_ == Doc(Node(Data(t"root", List(Node(t"param1")(), Node(t"param2")()), Unset), Meta(0,
+      .assert(_ == Doc(Node(Data(t"root", List(Node(t"param1")(), Node(t"param2")())), Meta(0,
           List(t" comment"), t"remark")), Node(t"peer")()))
       
       test(t"Comment on blank node"):
         read(t"# comment\n\nroot").untyped
-      .assert(_ == Doc(Node(Unset, Meta(0, List(t" comment"), Unset)), Node(Data(t"root", Nil, Unset), Meta(1,
+      .assert(_ == Doc(Node(Unset, Meta(0, List(t" comment"), Unset)), Node(Data(t"root", Nil), Meta(1,
           Nil, Unset))))
       
       test(t"Remark after blank line"):
         read(t"root\n\npeer # remark").untyped
-      .assert(_ == Doc(Node(t"root")(), Node(Data(t"peer", Nil, Unset), Meta(0, Nil, t"remark"))))
+      .assert(_ == Doc(Node(t"root")(), Node(Data(t"peer", Nil), Meta(0, Nil, t"remark"))))
       
       test(t"Long item"):
         read(t"root\n    one two\n").wiped
@@ -570,7 +568,7 @@ object Tests extends Suite(t"CoDL tests"):
       
       test(t"Present required node does not throw exception"):
         requiredChild.parse(t"root\n  child").untyped.root().child()
-      .assert(_ == Data(t"child", Nil, Unset))
+      .assert(_ == Data(t"child", Nil))
       
       val repeatableChild = Struct(
                               t"root" -> Struct(
@@ -624,7 +622,7 @@ object Tests extends Suite(t"CoDL tests"):
       
       test(t"Access parameters by name"):
         childWithTwoParams(One, One).parse(t"root\n  child first second").root().child().beta()
-      .assert(_ == Data(t"second", Nil, Unset, Field(One)))
+      .assert(_ == Data(t"second", Nil, schema = Field(One)))
 
       test(t"Surplus parameters"):
         capture(childWithTwoParams(One, One).parse(t"root\n  child one two three"))
@@ -714,47 +712,147 @@ object Tests extends Suite(t"CoDL tests"):
         capture(rootWithTwoParams(AtLeastOne, AtLeastOne).parse(t"  child one two three\n    beta one"))
       .assert(_ == CodlValidationError(t"child", MissingKey(t"beta")))
 
-      // test(t"Root and two params"):
-      //   schema.parse(t"root param1 param2")
-      // .assert(_ == Doc(Node(t"root")(Node(t"first")(Node(t"param1")()), Node(t"second")(Node(t"param2")()))))
-      
-      // test(t"Root and three params"):
-      //   schema.parse(t"root param1 param2 param3")
-      // .assert(_ == Doc(Node(t"root")(Node(t"first")(Node(t"param1")()), Node(t"second")(Node(t"param2")()),
-      //     Node(t"third")(Node(t"param3")()))))
-      
-      // test(t"Child with param"):
-      //   schema.parse(t"root\n  child param3")
-      // .assert(_ == Doc(Node(t"root")(Node(t"child")(Node(t"one")(Node(t"param3")())))))
-      
-      // test(t"Root with indent of 1"):
-      //   Schema.Freeform.parse(t" root")
-      // .assert(_ == Doc(List(Node(t"root")()), 1))
+    suite(t"Binary tests"):
 
-      // test(t"Single child with indent of 3"):
-      //   schema.parse(t"   root\n     child")
-      // .assert(_ == Doc(List(Node(t"root")(Node(t"child")())), 3))
+      val schema = Struct(
+        t"field" -> Struct(
+          t"child" -> Field(Optional)
+        ),
+        t"field2" -> Field(Optional),
+        t"field3" -> Field(Optional)
+      )
       
-      // test(t"Single child with joined parameter"):
-      //   schema.parse(t"root\n  other Hello World")
-      // .assert(_ == Doc(Node(t"root")(Node(t"other")(Node(t"param")(Node(t"Hello World")())))))
+      def roundtrip(doc: Doc)(using Log): Doc = Bin.read(doc.schema, ji.StringReader(doc.binary.s).nn)
 
-      // test(t"Parse peer root nodes (with indent)"):
-      //   Schema.Freeform.parse(t"  root\n  peer")
-      // .assert(_ == Doc(List(Node(t"root")(), Node(t"peer")()), 2))
+      val doc = schema.parse(t"field")
       
-      // test(t"Parse peer root node with parameters"):
-      //   Schema.Freeform.parse(t"  root  param1 param2\n  peer")
-      // .assert(_ == Doc(List(Node(t"root")(Node(t"param1")(), Node(t"param2")()), Node(t"peer")()), 2))
+      test(t"Serialize and deserialize one node"):
+        roundtrip(doc)
+      .assert(_ == doc.uncommented)
 
+      val doc2 = schema.parse(t"field\n  child\n")
+      test(t"Serialize and deserialize one node and child"):
+        roundtrip(doc2)
+      .assert(_ == doc2.uncommented)
 
-    // suite(t"Generic Derivation tests"):
-    //   test(t"write a simple case class"):
-    //     Person(t"John Smith", 65).codl
-    //   .matches:
-    //     case Doc(_, IArray(Node(t"name", m1, _, _), Node(t"age", m2, _, _)), _)
-    //       if m1.values == Iterable(t"John Smith") && m2.values == Iterable(t"65") =>
+      val doc3 = schema.parse(t"field\n  child value")
+      test(t"Serialize and deserialize one node and child/param"):
+        roundtrip(doc3)
+      .assert(_ == doc3.uncommented)
       
+      val doc4 = schema.parse(t"field\n  child value value2 value3")
+      test(t"Serialize and deserialize one node and child with three params"):
+        roundtrip(doc4)
+      .assert(_ == doc4.uncommented)
+
+      val doc5 = schema.parse(t"field\n  child value value2\nfield2\nfield3")
+      test(t"Serialize and deserialize document with indent, outdent and peer"):
+        roundtrip(doc5)
+      .assert(_ == doc5.uncommented)
+
+    
+    def roundtrip[T: Codec](value: T): T = value.codl.as[T]
+
+    suite(t"Generic Derivation tests"):
+
+      case class Person(name: Text, age: Int)
+      case class Organisation(name: Text, ceo: Person)
+      case class Player(name: Text, rank: Maybe[Int])
+
+      test(t"write a simple case class"):
+        Person(t"John Smith", 65).codl.untyped
+      .assert(_ == Doc(Node(t"name")(Node(t"John Smith")()), Node(t"age")(Node(t"65")())))
+      
+      test(t"write a nested case class"):
+        val person1 = Person(t"Alpha", 1)
+        Organisation(t"Acme", person1).codl.untyped
+      .assert(_ == Doc(Node(t"name")(Node(t"Acme")()), Node(t"ceo")(Node(t"name")(Node(t"Alpha")()),
+          Node(t"age")(Node(t"1")()))))
+      
+      test(t"write a case class with optional field specified"):
+        Player(t"Barry", 1).codl.untyped
+      .assert(_ == Doc(Node(t"name")(Node(t"Barry")()), Node(t"rank")(Node(t"1")())))
+      
+      test(t"write a case class with optional field unspecified"):
+        Player(t"Barry", Unset).codl.untyped
+      .assert(_ == Doc(Node(t"name")(Node(t"Barry")())))
+      
+      test(t"serialize a List of case classes"):
+        List(Person(t"John Smith", 65), Person(t"Jim Calvin", 11)).codl.untyped
+      .assert(_ == Doc(
+        Node(t"item")(Node(t"name")(Node(t"John Smith")()), Node(t"age")(Node(t"65")())),
+        Node(t"item")(Node(t"name")(Node(t"Jim Calvin")()), Node(t"age")(Node(t"11")()))
+      ))
+      
+      test(t"serialize a List of integers"):
+        List(1, 2, 3).codl.untyped
+      .assert(_ == Doc(Node(t"1")(), Node(t"2")(), Node(t"3")()))
+      
+      test(t"serialize a List of booleans"):
+        List(true, false, true).codl.untyped
+      .assert(_ == Doc(Node(t"yes")(), Node(t"no")(), Node(t"yes")()))
+
+      test(t"roundtrip a true boolean"):
+        roundtrip[Boolean](true)
+      .assert(_ == true)
+      
+      test(t"roundtrip a false boolean"):
+        roundtrip[Boolean](false)
+      .assert(_ == false)
+      
+      test(t"roundtrip an integer"):
+        roundtrip[Int](42)
+      .assert(_ == 42)
+      
+      test(t"roundtrip some text"):
+        roundtrip[Text](t"hello world")
+      .assert(_ == t"hello world")
+      
+      test(t"roundtrip a list of strings"):
+        roundtrip[List[Text]](List(t"hello", t"world"))
+      .assert(_ == List(t"hello", t"world"))
+      
+      test(t"roundtrip a list of case classes"):
+        roundtrip[List[Person]](List(Person(t"Jack", 12), Person(t"Bill", 32)))
+      .assert(_ == List(Person(t"Jack", 12), Person(t"Bill", 32)))
+      
+      case class Foo(alpha: Text, beta: Maybe[Text])
+      test(t"roundtrip a case class with an optional parameter"):
+        roundtrip(Foo(t"one", t"two"))
+      .assert(_ == Foo(t"one", t"two"))
+      
+      test(t"roundtrip a case class with an optional parameter, unset"):
+        roundtrip(Foo(t"one", Unset))
+      .assert(_ == Foo(t"one", Unset))
+
+      case class Bar(foo: List[Baz], quux: Quux)
+      case class Quux(alpha: Text, beta: List[Byte])
+      case class Baz(gamma: Text, delta: Int, eta: Maybe[Char])
+      
+      val complex = Bar(List(Baz(t"a", 2, Unset), Baz(t"c", 6, 'e')), Quux(t"e", List(1, 2, 4)))
+      
+      test(t"roundtrip a complex case class"):
+        roundtrip(complex)
+      .assert(_ == complex)
+
+      def print[T: Codec](value: T): Text =
+        val writer = new ji.StringWriter()
+        Printer.print(writer, value.codl)
+        writer.toString().show
+
+      test(t"print a simple case class"):
+        print(Foo(t"one", t"two"))
+      .assert(_ == t"alpha one\nbeta two\n")
+      
+      test(t"print a complex case class"):
+        print(complex)
+      .assert(_ == t"foo\n  item\n    gamma a\n    delta 2\n  item\n    gamma c\n    delta 6\n    eta e\nquux\n  alpha e\n  beta 1 2 4\n")
+      
+      test(t"roundtrip a complex case class "):
+        read(print(complex)).as[Bar]
+      .assert(_ == complex)
+      
+
     //   test(t"write a nested case class"):
     //     Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl.show
     //   .assert(_ == t"""|name

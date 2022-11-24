@@ -19,28 +19,23 @@
   },
   "modules": [
     {
-      "name": "CoDL",
-      "id": "codl/core",
+      "name": "Cellulose",
+      "id": "cellulose/core",
       "links": ["gossamer/core", "eucalyptus/core"],
       "sources": ["src/core"],
       "version": "0.4.0",
       "docs": ["doc"]
     },
     {
-      "name": "CoDL Tests",
-      "id": "codl/test",
-      "links": ["probably/cli", "codl/core"],
+      "name": "Cellulose Tests",
+      "id": "cellulose/test",
+      "links": ["probably/cli", "cellulose/core"],
       "sources": ["src/test"],
       "version": "0.4.0",
       "docs": ["doc"],
-      "xartifact": {
-        "path": "tests.jar",
-	      "type": "fat-jar",
-        "main": "codl.Tests"
-      },
       "exec": {
         "browsers": [],
-        "start": "codl.Tests"
+        "start": "cellulose.Tests"
       }
     }
   ]
