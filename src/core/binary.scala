@@ -5,6 +5,8 @@ import rudiments.*
 import gossamer.*
 import eucalyptus.*
 
+import language.experimental.captureChecking
+
 object Bin:
   private def write(out: ji.Writer, number: Int): Unit = out.write((number + 32).toChar)
 

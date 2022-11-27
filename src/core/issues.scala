@@ -6,6 +6,8 @@ import gossamer.*
 export CodlParseError.Issue.*
 export CodlValidationError.Issue.*
 
+import language.experimental.captureChecking
+
 sealed trait CodlError extends Exception
 
 object CodlParseError:
@@ -41,7 +43,7 @@ extends Error(err"could not parse CoDL document at $line:$col: ${issue.show}"), 
 object CodlValidationError:
   object Issue:
     given Show[Issue] =
-      case MissingKey(key: Text) => t"the node $key was missing"
+      case MissingKey(key)       => t"the node $key was missing"
       case DuplicateKey(key)     => t"the unique key $key has already been used"
       case SurplusParams(key)    => t"too many parameters were given to the key $key"
       case InvalidKey(Unset)     => t"an unnamed key was invalid"

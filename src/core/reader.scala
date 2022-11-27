@@ -6,6 +6,8 @@ import eucalyptus.*
 
 import java.io.*
 
+import language.experimental.captureChecking
+
 opaque type Character = Long
 
 object Character:

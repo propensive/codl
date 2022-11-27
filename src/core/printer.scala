@@ -2,6 +2,8 @@ package cellulose
 
 import java.io as ji
 
+import language.experimental.captureChecking
+
 object Printer:
   def print(out: ji.Writer, doc: Doc): Unit =
     

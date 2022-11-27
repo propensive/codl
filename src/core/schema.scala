@@ -5,6 +5,7 @@ import eucalyptus.*
 
 import java.io as ji
 
+import language.experimental.captureChecking
 import language.dynamics
 
 object Schema:
@@ -19,7 +20,7 @@ object Schema:
   def apply(subschemas: List[(Text, Schema)]): Schema = Struct(subschemas.map(Entry(_, _)), Arity.Optional)
 
 sealed trait Schema(protected val subschemas: IArray[Schema.Entry], val arity: Arity,
-                        val validator: Maybe[Text => Boolean])
+                        val validator: Maybe[Text -> Boolean])
 extends Dynamic:
   import Schema.{Free, Entry}
   protected lazy val dictionary: Map[Maybe[Text], Schema] = subschemas.map(_.tuple).to(Map)
@@ -64,6 +65,6 @@ extends Schema(IArray.from(structSubschemas), structArity, Unset):
 
     recur(subschemas.to(List), Nil)
 
-case class Field(fieldArity: Arity, fieldValidator: Maybe[Text => Boolean] = Unset)
+case class Field(fieldArity: Arity, fieldValidator: Maybe[Text -> Boolean] = Unset)
 extends Schema(IArray(), fieldArity, fieldValidator):
   def optional: Field = Field(Arity.Optional, fieldValidator)

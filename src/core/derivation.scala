@@ -6,6 +6,8 @@ import wisteria.*
 
 import Arity.*
 
+import language.experimental.captureChecking
+
 trait Codec[T]:
   def serialize(value: T): IArray[Node]
   def deserialize(value: IArray[Node]): T

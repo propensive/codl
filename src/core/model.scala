@@ -6,6 +6,7 @@ import eucalyptus.*
 
 import java.io as ji
 
+import language.experimental.captureChecking
 import language.dynamics
 
 object Node:
@@ -16,24 +17,24 @@ object Node:
   def apply(key: Text)(child: Node*): Node = Node(Data(key, IArray.from(child)))
 
 case class Node(data: Maybe[Data] = Unset, meta: Maybe[Meta] = Unset) extends Dynamic:
-  def key: Maybe[Text] = data.mmap(_.key)
+  def key: Maybe[Text] = data.mm(_.key)
   def empty: Boolean = unsafely(data.unset || data.assume.children.isEmpty)
-  def schema: Maybe[Schema] = data.mmap(_.schema)
-  def layout: Maybe[Layout] = data.mmap(_.layout)
+  def schema: Maybe[Schema] = data.mm(_.schema)
+  def layout: Maybe[Layout] = data.mm(_.layout)
 
   def selectDynamic(key: String): List[Data] throws MissingValueError =
     data.option.getOrElse(throw MissingValueError(key.show)).selectDynamic(key)
   
   def applyDynamic(key: String)(idx: Int = 0): Data throws MissingValueError = selectDynamic(key)(idx)
 
-  def has(key: Maybe[Text]): Boolean = data.mmap(_.has(key)).otherwise(false)
+  def has(key: Maybe[Text]): Boolean = data.mm(_.has(key)).or(false)
   
   def untyped: Node =
-    val data2 = data.mmap { data => Data(data.key, children = data.children.map(_.untyped)) }
+    val data2 = data.mm { data => Data(data.key, children = data.children.map(_.untyped)) }
     Node(data2, meta)
   
   def uncommented: Node =
-    val data2 = data.mmap { data => Data(data.key, children = data.children.map(_.uncommented), Layout.empty, data.schema) }
+    val data2 = data.mm { data => Data(data.key, children = data.children.map(_.uncommented), Layout.empty, data.schema) }
     Node(data2, Unset)
 
   def wiped: Node = untyped.uncommented
@@ -68,7 +69,7 @@ case class Doc(children: IArray[Node], schema: Schema, margin: Int) extends Inde
 
 case class Data(key: Text, children: IArray[Node] = IArray(), layout: Layout = Layout.empty, schema: Schema = Schema.Free)
 extends Indexed:
-  def paramCount: Int = layout.mfold(0)(_.params)
+  def paramCount: Int = layout.fm(0)(_.params)
   
   override def equals(that: Any) = that.matchable(using Unsafe) match
     case that: Data =>
@@ -99,7 +100,7 @@ trait Indexed extends Dynamic:
     val init: Map[Maybe[Text], List[Data]] = schema match
       case schema@Struct(_, _) =>
         array.take(paramCount).zipWithIndex.foldLeft(Map[Maybe[Text], List[Data]]()):
-          case (acc, (param, idx)) => acc.plus(schema.param(idx).mmap(_.key), param)
+          case (acc, (param, idx)) => acc.plus(schema.param(idx).mm(_.key), param)
       case Field(_, _) =>
         Map()
     
