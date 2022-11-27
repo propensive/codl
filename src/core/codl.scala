@@ -36,7 +36,7 @@ case class Proto(key: Maybe[Text] = Unset, children: List[Node] = Nil, meta: May
       val meta2 = meta.mm { m => m.copy(comments = m.comments.reverse) }
       Node(Data(key, IArray.from(children.reverse), Layout(params, multiline), schema), meta2)
 
-  def has(key: Maybe[Text]): Boolean = fail(key, DuplicateKey(key))//dictionary.contains(key)
+  def has(key: Maybe[Text]): Boolean = dictionary.contains(key)
  
   // FIXME: These need to go
   private lazy val array: IArray[Data] = IArray.from(children.map(_.data).sift[Data])
@@ -58,7 +58,7 @@ case class Proto(key: Maybe[Text] = Unset, children: List[Node] = Nil, meta: May
 
 object Codl:
 
-  private def fail(key: Maybe[Text], issue: CodlValidationError.Issue): Nothing throws CodlValidationError =
+  def fail(key: Maybe[Text], issue: CodlValidationError.Issue): Nothing throws CodlValidationError =
     throw CodlValidationError(key, issue)
 
   def parse(reader: Reader, schema: Schema = Schema.Free)(using Log)

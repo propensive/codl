@@ -852,7 +852,33 @@ object Tests extends Suite(t"CoDL tests"):
         read(print(complex)).as[Bar]
       .assert(_ == complex)
       
+    suite(t"Record tests"):
 
+      val record = GreekRecords(example1)
+      
+      test[Maybe[Text]](t"Test optional return value"):
+        record.alpha
+      .assert(_ == t"one")
+      
+      test(t"Test return value"):
+        record.beta
+      .assert(_ == t"two")
+      
+      test[Maybe[Text]](t"Test missing value"):
+        record.iota
+      .assert(_ == Unset)
+      
+      test[Maybe[Text]](t"Test unique return value"):
+        record.eta
+      .assert(_ == t"eight")
+      
+      test(t"Test many return value"):
+        record.gamma
+      .assert(_ == List(t"three", t"four", t"five"))
+      
+      test(t"Test multiple return value"):
+        record.kappa
+      .assert(_ == List(t"nine", t"ten", t"eleven"))
     //   test(t"write a nested case class"):
     //     Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl.show
     //   .assert(_ == t"""|name

@@ -19,7 +19,7 @@ object Schema:
 
   def apply(subschemas: List[(Text, Schema)]): Schema = Struct(subschemas.map(Entry(_, _)), Arity.Optional)
 
-sealed trait Schema(protected val subschemas: IArray[Schema.Entry], val arity: Arity,
+sealed trait Schema(val subschemas: IArray[Schema.Entry], val arity: Arity,
                         val validator: Maybe[Text -> Boolean])
 extends Dynamic:
   import Schema.{Free, Entry}
@@ -29,6 +29,7 @@ extends Dynamic:
 
   def optional: Schema
   def entry(n: Int): Entry = subschemas(n)
+  
   def parse(text: Text)(using Log): Doc throws CodlParseError | CodlValidationError =
     Codl.parse(ji.StringReader(text.s), this)
   
