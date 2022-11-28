@@ -23,7 +23,7 @@ object Bin:
     write(out, dataNodes.length)
     
     dataNodes.foreach:
-      case Data(key, children, _, _, _) =>
+      case Data(key, children, _, _) =>
         schema match
           case Field(_, _) =>
             write(out, key)
@@ -41,25 +41,18 @@ object Bin:
         schema match
           case Field(_, _) =>
             val key = readText(reader)
-            Node(Data(key, IArray(), Layout.empty, Schema.Free, Map()))
+            Node(Data(key, IArray(), Layout.empty, Schema.Free))
           
           case schema =>
             val subschema = readNumber(reader) match
-              case 0  => Schema.Entry(Unset, Schema.Free)
-              case idx => schema.entry(idx - 1)
+              case 0  => (Unset, Schema.Free)
+              case idx => schema.entry(idx - 1).tuple
 
-            val key = subschema.key.option.getOrElse(throw BinaryError(t"unexpected key", 0))
+            val key = subschema(0).option.getOrElse(throw BinaryError(t"unexpected key", 0))
 
-            val children = IArray.from(recur(subschema.schema))
+            val children = IArray.from(recur(subschema(1)))
             
-            val index: Map[Text, Int] =
-              children.zipWithIndex.flatMap: (child, idx) =>
-                child.mm(_.id) match
-                  case Unset => Nil
-                  case id: Text => List(id -> idx)
-              .toMap
-
-            Node(Data(key, children, Layout.empty, subschema.schema, index))
+            Node(Data(key, children, Layout.empty, subschema(1)))
     
     Doc(IArray.from(recur(schema)), schema, 0)
 

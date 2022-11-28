@@ -1,6 +1,7 @@
 package cellulose
 
 import rudiments.*
+import gossamer.*
 import eucalyptus.*
 
 import java.io as ji
@@ -9,10 +10,11 @@ import language.experimental.captureChecking
 import language.dynamics
 
 object Schema:
-  case class Entry(key: Maybe[Text], schema: Schema):
+  case class Entry(key: Text, schema: Schema):
     export schema.arity.{required, variadic, unique}
 
-  object Free extends Struct(List(Entry(Unset, Field(Arity.Many))), Arity.Many):
+  // FIXME
+  object Free extends Struct(List(Entry(t"?", Field(Arity.Many))), Arity.Many):
     override def apply(key: Text): Maybe[Schema] = Free
     override def optional = Free
     override def toString(): String = "%"
@@ -29,14 +31,32 @@ extends Dynamic:
 
   def optional: Schema
   def entry(n: Int): Entry = subschemas(n)
-  
+
   def parse(text: Text)(using Log): Doc throws CodlParseError | CodlValidationError =
     Codl.parse(ji.StringReader(text.s), this)
   
   def apply(key: Text): Maybe[Schema] = dictionary.get(key).orElse(dictionary.get(Unset)).getOrElse(Unset)
-  def has(key: Maybe[Text]): Boolean = dictionary.contains(key)
-  lazy val requiredKeys: List[Text] = subschemas.filter(_.required).map(_.key).sift[Text].to(List)
+  def apply(idx: Int): Entry = subschemas(idx)
 
+  private lazy val fieldCount: Int = subschemas.indexWhere(!_.schema.is[Field]) match
+    case -1    => subschemas.size
+    case count => count
+  
+  private lazy val firstVariadic: Maybe[Int] = subschemas.indexWhere(_.schema.variadic) match
+    case -1  => Unset
+    case idx => idx
+  
+  lazy val paramCount: Int = firstVariadic.fm(fieldCount) { f => (f + 1).min(fieldCount) }
+  private lazy val endlessParams: Boolean = firstVariadic.fm(false)(_ < fieldCount)
+
+  def param(idx: Int): Maybe[Entry] =
+    if idx < paramCount then subschemas(idx)
+    else if endlessParams && paramCount > 0 then subschemas(paramCount - 1) else Unset
+
+  def has(key: Maybe[Text]): Boolean = dictionary.contains(key)
+  
+  lazy val requiredKeys: List[Text] = subschemas.filter(_.required).map(_.key).sift[Text].to(List)
+  
   export arity.{required, variadic, unique}
 
 enum Arity:
@@ -47,15 +67,17 @@ enum Arity:
   def unique: Boolean = !variadic
 
 object Struct:
-  def apply(subschemas: (Text, Schema)*): Struct =
-    Struct(subschemas.map(Schema.Entry(_, _)).to(List), Arity.Optional)
+  def apply(arity: Arity, subschemas: (Text, Schema)*): Struct =
+    Struct(subschemas.map(Schema.Entry(_, _)).to(List), arity)
 
 case class Struct(structSubschemas: List[Schema.Entry], structArity: Arity = Arity.Optional)
 extends Schema(IArray.from(structSubschemas), structArity, Unset):
   import Schema.{Free, Entry}
   
   def optional: Struct = Struct(structSubschemas, Arity.Optional)
-  def param(n: Int): Maybe[Entry] = params.lift(n).getOrElse(if params.last.variadic then params.last else Unset)
+  def uniqueIndex: Maybe[Int] = subschemas.indexWhere(_.schema.arity == Arity.Unique) match
+    case -1  => Unset
+    case idx => idx
   
   lazy val params: IArray[Entry] =
     def recur(subschemas: List[Entry], fields: List[Entry]): IArray[Entry] = subschemas match

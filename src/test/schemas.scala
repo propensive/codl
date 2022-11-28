@@ -8,7 +8,7 @@ import logging.silent
 
 import Arity.*
 
-val Greek = Struct(
+val Greek = Struct(Optional,
   t"alpha" -> Field(Optional),
   t"beta"  -> Field(One),
   t"gamma" -> Field(Many),

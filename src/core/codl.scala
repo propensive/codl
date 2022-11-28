@@ -19,44 +19,24 @@ enum Token:
 case class Proto(key: Maybe[Text] = Unset, children: List[Node] = Nil, meta: Maybe[Meta] = Unset,
                      schema: Schema = Schema.Free, params: Int = 0, multiline: Boolean = false):
   
-  def set(key: Text): Proto = copy(key = key)
+  def commit(child: Proto): Proto throws CodlValidationError =
+    // println(s"Adding $child to $this")
+    copy(children = child.close :: children, params = params + 1)
   
-  def commit(child: Proto): Proto = copy(children = child.close :: children, params = params + 1)
-  
-  def set(meta: Maybe[Meta]): Proto = copy(meta = meta)
-  def set(schema: Schema): Proto = copy(schema = schema)
-  def set(multiline: Boolean): Proto = copy(multiline = multiline)
+  def setMeta(meta: Maybe[Meta]): Proto = copy(meta = meta)
 
-  def close: Node =
+  def close: Node throws CodlValidationError =
+    // println(s"Closing $this")
     key.fm(Node(Unset, meta)):
       case key: Text =>
         val meta2 = meta.mm { m => m.copy(comments = m.comments.reverse) }
+        val node = Node(Data(key, IArray.from(children.reverse), Layout(params, multiline), schema), meta2)
         
-        val keys = children.map(_.id).zipWithIndex.collect:
-          case (id: Text, idx) => id -> idx
-        .to(Map)
+        schema.requiredKeys.foreach: key =>
+          if !node.data.mm(_.has(key)).or(false) then Codl.fail(node.key, MissingKey(key))
+          //then unsafely(throw new Exception(s"FAILED: ${this}"))
 
-        Node(Data(key, IArray.from(children.reverse), Layout(params, multiline), schema, keys), meta2)
-
-  def has(key: Maybe[Text]): Boolean = dictionary.contains(key)
- 
-  // FIXME: These need to go
-  private lazy val array: IArray[Data] = IArray.from(children.map(_.data).sift[Data])
-  
-  private lazy val dictionary: Map[Maybe[Text], List[Data]] =
-    val ddata = children.map(_.data).sift[Data]
-    
-    val init: Map[Maybe[Text], List[Data]] = schema match
-      case schema@Struct(_, _) =>
-        array.take(params).zipWithIndex.foldLeft(Map[Maybe[Text], List[Data]]()):
-          case (acc, (param, idx)) => acc.plus(schema.param(idx).mm(_.key), param)
-      
-      case Field(_, _) =>
-        Map()
-    
-    ddata.drop(params).foldLeft(init): (acc, data) =>
-      acc.plus(data.key, data)
-    .view.mapValues(_.reverse).to(Map)
+        node
 
 object Codl:
 
@@ -71,6 +51,9 @@ object Codl:
     def recur(tokens: LazyList[Token], focus: Proto, peers: List[Node], stack: List[(Proto, List[Node])],
                   lines: Int)
              : Doc =
+      // println(s"Got ${tokens.head}")
+      // println(s"foucs = ${focus.children.toList.map(_.key)}")
+
       
       def schema: Schema = stack.headOption.fold(baseSchema)(_.head.schema.option.get)
       
@@ -82,12 +65,15 @@ object Codl:
       tokens match
         case head #:: tail => head match
           case Token.Peer => focus.key match
+            case key: Text =>
+              go(focus = Proto(), peers = focus.close :: peers)
+          
             case Unset =>
               go(focus = Proto(Unset, Nil, focus.meta.or(if lines == 0 then Unset else Meta(lines))))
             
-            case key: Text @unchecked =>
-              go(focus = Proto(), peers = focus.close :: peers)
-          
+            case _ =>
+              throw Mistake("Should never match")
+            
           case Token.Indent =>
             go(focus = Proto(), peers = Nil, stack = (focus -> peers) :: stack)
           
@@ -95,12 +81,14 @@ object Codl:
             case Nil =>
               go(LazyList())
             
-            case proto -> rest :: stack2 =>
+            case (proto, rest) :: stack2 =>
+              // println(s"Recovered $proto from the stack")
+              // println(s"stack.h.h is ${stack.head.head}")
               val next = if n == 1 then Token.Peer else Token.Outdent(n - 1)
-              val focus2 = stack.head.head.copy(children = focus.close :: peers)
+              val focus2 = proto.copy(children = focus.close :: peers ::: proto.children)
 
-              focus.schema.fm(Nil)(_.requiredKeys).foreach: key =>
-                if !focus.has(key) then fail(focus.key, MissingKey(key))
+              // focus.schema.fm(Nil)(_.requiredKeys).foreach: key =>
+              //   if !focus.has(key) then fail(focus.key, MissingKey(key))
 
               go(next #:: tail, focus = focus2, peers = rest, stack = stack2)
           
@@ -124,26 +112,32 @@ object Codl:
                 go(focus = Proto(word, Nil, meta2, fschema), lines = 0)
               
               case key: Text => focus.schema match
-                case field@Field(_, _)   => go(focus = focus.commit(Proto(word)).set(meta2), lines = 0)
-                case Schema.Free         => go(focus = focus.commit(Proto(word)).set(meta2), lines = 0)
+                case field@Field(_, _)   => go(focus = focus.commit(Proto(word)), lines = 0)
+                case Schema.Free         => go(focus = focus.commit(Proto(word)), lines = 0)
                 
                 case struct@Struct(_, _) => struct.param(focus.children.length) match
                   case Unset                => fail(word, SurplusParams(key))
                   
-                  case entry: Schema.Entry  => val peer = Proto(word, schema = entry.schema)
-                                               go(focus = focus.commit(peer).set(meta2), lines = 0)
+                  case entry: Schema.Entry  => // println(s"Set entry $entry")
+                                               val peer = Proto(word, schema = entry.schema)
+                                               go(focus = focus.commit(peer), lines = 0)
+              
+              case _ =>
+                throw Mistake("Should never match")
           
           case Token.Comment(txt, _, _) => focus.key match
             case Unset => val meta = focus.meta.or(Meta())
                           go(focus = Proto(meta = meta.copy(blank = lines, comments = txt :: meta.comments)))
             
-            case key: Text => go(focus = focus.set(focus.meta.or(Meta()).copy(remark = txt, blank = lines)))
+            case key: Text => go(focus = focus.setMeta(focus.meta.or(Meta()).copy(remark = txt, blank = lines)))
+          
+            case _ => throw Mistake("Should never match")
 
 
         case empty => stack match
           case Nil =>
-            focus.schema.fm(Nil)(_.requiredKeys).foreach: key =>
-              if !focus.has(key) then fail(focus.key, MissingKey(key))
+            // focus.schema.fm(Nil)(_.requiredKeys).foreach: key =>
+            //   if !focus.has(key) then fail(focus.key, MissingKey(key))
             
             Doc(IArray.from((focus.close :: peers).reverse), baseSchema, margin)
           

@@ -43,20 +43,18 @@ extends Error(err"could not parse CoDL document at $line:$col: ${issue.show}"), 
 object CodlValidationError:
   object Issue:
     given Show[Issue] =
-      case MissingKey(key)       => t"the node $key was missing"
-      case DuplicateKey(key)     => t"the unique key $key has already been used"
-      case SurplusParams(key)    => t"too many parameters were given to the key $key"
-      case InvalidKey(Unset)     => t"an unnamed key was invalid"
-      case InvalidKey(key: Text) => t"the key $key was invalid"
-      case DuplicateId(id)       => t"the id $id has been used more than once"
+      case MissingKey(key)    => t"the value $key was missing"
+      case DuplicateKey(key)  => t"the unique key $key has already been used"
+      case SurplusParams(key) => t"too many parameters were given to the key $key"
+      case InvalidKey(key)    => t"the key $key was invalid"
+      case DuplicateId(id)    => t"the id $id has been used more than once"
 
   enum Issue:
     case MissingKey(key: Text)
     case DuplicateKey(key: Text)
     case SurplusParams(cmd: Text)
-    case InvalidKey(key: Maybe[Text])
+    case InvalidKey(key: Text)
     case DuplicateId(id: Text)
-    case NodeAsParam(key: Text)
 
 case class CodlValidationError(word: Maybe[Text], issue: CodlValidationError.Issue)
 extends Error(err"the CoDL document did not conform to the schema at $word because ${issue.show}"), CodlError
