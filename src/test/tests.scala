@@ -712,6 +712,31 @@ object Tests extends Suite(t"CoDL tests"):
         capture(rootWithTwoParams(AtLeastOne, AtLeastOne).parse(t"  child one two three\n    beta one"))
       .assert(_ == CodlValidationError(t"child", MissingKey(t"beta")))
 
+    suite(t"Path tests"):
+      val schema = Struct(
+        t"root" -> Struct(
+          t"field" -> Struct(
+            t"id"   -> Field(Unique),
+            t"name" -> Field(One),
+            t"description" -> Field(One)
+          ),
+          t"another" -> Struct(
+            t"id"      -> Field(Unique),
+            t"name"    -> Field(One),
+            t"color"   -> Field(Optional),
+            t"size"    -> Field(Optional)
+          )
+        )
+      )
+
+      test(t"Node contains reference to an ident param"):
+        schema.parse(t"""root\n  field apple Braeburn red""").root().index.keys
+      .assert(_ == Set(t"apple"))
+      
+      test(t"Node contains reference to an ident param as a child"):
+        schema.parse(t"""root\n  another\n    id foo\n    name Jack\n    color blue\n    size 8""").root().index.keys
+      .assert(_ == Set(t"jack"))
+      
     suite(t"Binary tests"):
 
       val schema = Struct(
@@ -852,176 +877,72 @@ object Tests extends Suite(t"CoDL tests"):
         read(print(complex)).as[Bar]
       .assert(_ == complex)
       
-    suite(t"Record tests"):
+    // suite(t"Record tests"):
 
-      val record = GreekRecords(example1)
+    //   val record = GreekRecords(example1)
       
-      test[Maybe[Text]](t"Test optional return value"):
-        record.alpha
-      .assert(_ == t"one")
+    //   test[Maybe[Text]](t"Test optional return value"):
+    //     record.alpha
+    //   .assert(_ == t"one")
       
-      test(t"Test return value"):
-        record.beta
-      .assert(_ == t"two")
+    //   test(t"Test return value"):
+    //     record.beta
+    //   .assert(_ == t"two")
       
-      test[Maybe[Text]](t"Test missing value"):
-        record.iota
-      .assert(_ == Unset)
+    //   test[Maybe[Text]](t"Test missing value"):
+    //     record.iota
+    //   .assert(_ == Unset)
       
-      test[Maybe[Text]](t"Test unique return value"):
-        record.eta
-      .assert(_ == t"eight")
+    //   test[Maybe[Text]](t"Test unique return value"):
+    //     record.eta
+    //   .assert(_ == t"eight")
       
-      test(t"Test many return value"):
-        record.gamma
-      .assert(_ == List(t"three", t"four", t"five"))
+    //   test(t"Test many return value"):
+    //     record.gamma
+    //   .assert(_ == List(t"three", t"four", t"five"))
       
-      test(t"Test multiple return value"):
-        record.kappa
-      .assert(_ == List(t"nine", t"ten", t"eleven"))
-    //   test(t"write a nested case class"):
-    //     Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl.show
-    //   .assert(_ == t"""|name
-    //                    |    Acme Inc
-    //                    |ceo
-    //                    |  name
-    //                    |      John Smith
-    //                    |  age 65
-    //                    |""".s.stripMargin.show)
+    //   test(t"Test multiple return value"):
+    //     record.kappa
+    //   .assert(_ == List(t"nine", t"ten", t"eleven"))
 
-    //   test(t"serialize a simple case class"):
-    //     Person(t"John", 65).codl.show
-    //   .assert(_ == t"""|name John
-    //                    |age 65
-    //                    |""".s.stripMargin.show)
-      
-    //   test(t"serialize a case class with long string"):
-    //     Person(t"John Smith", 65).codl.show
-    //   .assert(_ == t"""|name
-    //                    |    John Smith
-    //                    |age 65
-    //                    |""".s.stripMargin.show)
-      
-    //   test(t"serialize a nested case class"):
-    //     Organisation(t"Acme", Person(t"John", 65)).codl.show
-    //   .assert(_ == t"""|name Acme
-    //                    |ceo John 65
-    //                    |""".s.stripMargin.show)
+    suite(t"Serialization tests"):
 
-    //   test(t"serialize a nested case class and long strings"):
-    //     Organisation(t"Acme Inc", Person(t"John Smith", 65)).codl.show
-    //   .assert(_ == t"""|name
-    //                    |    Acme Inc
-    //                    |ceo
-    //                    |  name
-    //                    |      John Smith
-    //                    |  age 65
-    //                    |""".s.stripMargin.show)
-      
-    //   test(t"serialize a list of items"):
-    //     Items(Item(t"one"), Item(t"two"), Item(t"three")).codl.show
-    //   .assert(_ == t"""|item one
-    //                    |item two
-    //                    |item three
-    //                    |""".s.stripMargin.show)
-      
-    //   test(t"serialize a list of case classes"):
-    //     Items(Person(t"Tom", 10), Person(t"Dick", 11), Person(t"Harry", 12)).codl.show
-    //   .assert(_ == t"""|item Tom 10
-    //                    |item Dick 11
-    //                    |item Harry 12
-    //                    |""".s.stripMargin.show)
-      
-    //   test(t"serialize a list of case classes with long names"):
-    //     Items(Person(t"Tom Smith", 10), Person(t"Dick Smith", 11), Person(t"Harry Smith", 12)).codl.show
-    //   .assert(_ == t"""|item
-    //                    |  name
-    //                    |      Tom Smith
-    //                    |  age 10
-    //                    |item
-    //                    |  name
-    //                    |      Dick Smith
-    //                    |  age 11
-    //                    |item
-    //                    |  name
-    //                    |      Harry Smith
-    //                    |  age 12
-    //                    |""".s.stripMargin.show)
-      
-    //   test(t"serialize a list of param/children case classes"):
-    //     Items(Organisation(t"Acme", Person(t"Tom Smith", 10)), Organisation(t"Alpha One",
-    //         Person(t"Harry", 11))).codl.show
-    //   .assert(_ == t"""|item Acme
-    //                    |  ceo
-    //                    |    name
-    //                    |        Tom Smith
-    //                    |    age 10
-    //                    |item
-    //                    |  name
-    //                    |      Alpha One
-    //                    |  ceo Harry 11
-    //                    |""".s.stripMargin.show)
-      
-    //   test(t"serialize a mixture of two lists"):
-    //     Meal(List(Drink(t"Coke"), Drink(t"Lemonade")), List(Food(t"Apple"), Food(t"Orange"))).codl.show
-    //   .assert(_ == t"""|drink Coke
-    //                    |drink Lemonade
-    //                    |food Apple
-    //                    |food Orange
-    //                    |""".s.stripMargin.show)
+      test(t"Serialize a node"):
+        Doc(Node(Data(t"root"))).serialize
+      .assert(_ == t"root\n")
 
-    // suite(t"Data roundtrip tests"):
-    //   def roundtrip[T: SchemaGen: Serializer: Deserializer](value: T)(using Log): T =
-    //     val text = value.codl
-    //     Log.info(text.toString)
-    //     Log.info(text.show)
-    //     Codl.parse(text.show).as[T]
-
-    //   case class Foo(item: Text)
-    //   case class Bar(foo1: Foo, foo2: Foo)
-    //   case class Baz(bar: Bar, foo: Foo)
+      test(t"Serialize a node and a child"):
+        Doc(Node(Data(t"root", IArray(Node(Data(t"child")))))).serialize
+      .assert(_ == t"root\n  child\n")
       
-    //   test(t"deserialize simplest case class"):
-    //     roundtrip(Foo(t"abc"))
-    //   .assert(_ == Foo(t"abc"))
+      test(t"Serialize a node and a child with params layout"):
+        Doc(Node(Data(t"root", IArray(Node(Data(t"child"))), Layout(1, false)))).serialize
+      .assert(_ == t"root child\n")
       
-    //   test(t"deserialize more complex case class"):
-    //     roundtrip(Bar(Foo(t"abc"), Foo(t"xyz")))
-    //   .assert(_ == Bar(Foo(t"abc"), Foo(t"xyz")))
+      test(t"Serialize a node and a child with block param"):
+        Doc(Node(Data(t"root", IArray(Node(Data(t"child")), Node(Data(t"Hello World"))), Layout(2, true)))).serialize
+      .assert(_ == t"root child\n    Hello World\n")
       
-    //   test(t"deserialize doubly-nested case class"):
-    //     roundtrip(Baz(Bar(Foo(t"abc"), Foo(t"xyz")), Foo(t"test")))
-    //   .assert(_ == Baz(Bar(Foo(t"abc"), Foo(t"xyz")), Foo(t"test")))
+      test(t"Serialize a node and a child with multiline block param"):
+        Doc(Node(Data(t"root", IArray(Node(Data(t"child")), Node(Data(t"Hello\nWorld"))), Layout(2, true)))).serialize
+      .assert(_ == t"root child\n    Hello\n    World\n")
       
-    //   test(t"deserialize doubly-nested case class with multiline strings"):
-    //     roundtrip(Baz(Bar(Foo(t"abc"), Foo(t"xyz")), Foo(t"abc\ndef")))
-    //   .assert(_ == Baz(Bar(Foo(t"abc"), Foo(t"xyz")), Foo(t"abc\ndef")))
+      test(t"Serialize a node and a child with comment"):
+        Doc(Node(Data(t"root", IArray(Node(Data(t"child"), Meta(comments = List(t"comment"))))))).serialize
+      .assert(_ == t"root\n  # comment\n  child\n")
       
-    //   test(t"deserialize doubly-nested case class with several long and multiline strings"):
-    //     roundtrip(Baz(Bar(Foo(t"abc 123"), Foo(t"xyz\n456 789")), Foo(t"abc\ndef")))
-    //   .assert(_ == Baz(Bar(Foo(t"abc 123"), Foo(t"xyz\n456 789")), Foo(t"abc\ndef")))
+      test(t"Serialize a node and a child with multiline comment"):
+        Doc(Node(Data(t"root", IArray(Node(Data(t"child"), Meta(comments = List(t"line 1", t"line 2"))))))).serialize
+      .assert(_ == t"root\n  # line 1\n  # line 2\n  child\n")
       
-    //   test(t"automatically trim strings with extra space"):
-    //     roundtrip(Baz(Bar(Foo(t" abc 123   "), Foo(t"  xyz\n456 789  ")), Foo(t"   abc\ndef ")))
-    //   .assert(_ == Baz(Bar(Foo(t"abc 123"), Foo(t"xyz\n456 789")), Foo(t"abc\ndef")))
+      test(t"Serialize a node and a child with multiline comment and blank lines"):
+        Doc(Node(Data(t"root", IArray(Node(Data(t"child"), Meta(blank = 2, comments = List(t"line 1", t"line 2"))))))).serialize
+      .assert(_ == t"root\n\n\n  # line 1\n  # line 2\n  child\n")
       
-    //   test(t"serialize and deserialize a case class"):
-    //     val codl = Person(t"John Smith", 65).codl
-    //     Codl.parse(codl.show).as[Person]
-    //   .assert(_ == Person(t"John Smith", 65))
+      test(t"Serialize a node and a child with blank lines"):
+        Doc(Node(Data(t"root", IArray(Node(Data(t"child"), Meta(blank = 2)))))).serialize
+      .assert(_ == t"root\n\n\n  child\n")
       
-    //   test(t"roundtrip a nested case class with a long strings"):
-    //     val org = Organisation(t"Acme Inc", Person(t"John Smith", 65))
-    //     Codl.parse(org.codl.show).as[Organisation]
-    //   .assert(_ == Organisation(t"Acme Inc", Person(t"John Smith", 65)))
-      
-    //   test(t"roundtrip a mixture of two lists"):
-    //     roundtrip(Meal(List(Drink(t"Coke"), Drink(t"Lemonade")), List(Food(t"Apple"), Food(t"Orange"))))
-    //   .assert(_ == Meal(List(Drink(t"Coke"), Drink(t"Lemonade")), List(Food(t"Apple"), Food(t"Orange"))))
-      
-    //   test(t"roundtrip a list of param/children case classes"):
-    //     roundtrip(Items(Organisation(t"Acme", Person(t"Tom Smith", 10)), Organisation(t"Alpha One",
-    //         Person(t"Harry", 11))))
-    //   .assert(_ == Items(Organisation(t"Acme", Person(t"Tom Smith", 10)), Organisation(t"Alpha One",
-    //       Person(t"Harry", 11))))
-      
+      test(t"Serialize a node and a child with a remark"):
+        Doc(Node(Data(t"root", IArray(Node(Data(t"child"), Meta(remark = t"some remark")))))).serialize
+      .assert(_ == t"root\n  child # some remark\n")

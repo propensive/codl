@@ -17,24 +17,26 @@ enum Token:
   case Blank
 
 case class Proto(key: Maybe[Text] = Unset, children: List[Node] = Nil, meta: Maybe[Meta] = Unset,
-                     schema: Schema = Schema.Free, params: Int = 0, multiline: Boolean = false,
-                     seen: Set[Text] = Set(), keys: Map[Text, Int] = Map()):
-
+                     schema: Schema = Schema.Free, params: Int = 0, multiline: Boolean = false):
+  
   def set(key: Text): Proto = copy(key = key)
   
-  def commit(child: Proto): Proto =
-    copy(children = child.close :: children, params = params + 1, seen = child.key.mm(seen + _).or(seen))
+  def commit(child: Proto): Proto = copy(children = child.close :: children, params = params + 1)
   
   def set(meta: Maybe[Meta]): Proto = copy(meta = meta)
   def set(schema: Schema): Proto = copy(schema = schema)
   def set(multiline: Boolean): Proto = copy(multiline = multiline)
-  def see(id: Text): Proto = copy(seen = seen + id)
-  def ref(id: Text, ref: Int) = copy(keys = keys.updated(id, ref))
 
-  def close: Node = key.fm(Node(Unset, meta)):
-    case key: Text =>
-      val meta2 = meta.mm { m => m.copy(comments = m.comments.reverse) }
-      Node(Data(key, IArray.from(children.reverse), Layout(params, multiline), schema), meta2)
+  def close: Node =
+    key.fm(Node(Unset, meta)):
+      case key: Text =>
+        val meta2 = meta.mm { m => m.copy(comments = m.comments.reverse) }
+        
+        val keys = children.map(_.id).zipWithIndex.collect:
+          case (id: Text, idx) => id -> idx
+        .to(Map)
+
+        Node(Data(key, IArray.from(children.reverse), Layout(params, multiline), schema, keys), meta2)
 
   def has(key: Maybe[Text]): Boolean = dictionary.contains(key)
  
@@ -126,10 +128,10 @@ object Codl:
                 case Schema.Free         => go(focus = focus.commit(Proto(word)).set(meta2), lines = 0)
                 
                 case struct@Struct(_, _) => struct.param(focus.children.length) match
-                  case Unset               => fail(word, SurplusParams(key))
+                  case Unset                => fail(word, SurplusParams(key))
                   
-                  case entry: Schema.Entry => val peer = Proto(word, schema = entry.schema)
-                                              go(focus = focus.commit(peer).set(meta2), lines = 0)
+                  case entry: Schema.Entry  => val peer = Proto(word, schema = entry.schema)
+                                               go(focus = focus.commit(peer).set(meta2), lines = 0)
           
           case Token.Comment(txt, _, _) => focus.key match
             case Unset => val meta = focus.meta.or(Meta())

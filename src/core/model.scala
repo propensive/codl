@@ -3,6 +3,7 @@ package cellulose
 import rudiments.*
 import gossamer.*
 import eucalyptus.*
+import quagmire.*
 
 import java.io as ji
 
@@ -14,13 +15,14 @@ object Node:
     t"${data.key}[${data.children.map(_.debug).join(t",")}]"
 
   val empty: Node = Node()
-  def apply(key: Text)(child: Node*): Node = Node(Data(key, IArray.from(child)))
+  def apply(key: Text)(child: Node*): Node = Node(Data(key, IArray.from(child), index = Map()))
 
 case class Node(data: Maybe[Data] = Unset, meta: Maybe[Meta] = Unset) extends Dynamic:
   def key: Maybe[Text] = data.mm(_.key)
   def empty: Boolean = unsafely(data.unset || data.assume.children.isEmpty)
   def schema: Maybe[Schema] = data.mm(_.schema)
   def layout: Maybe[Layout] = data.mm(_.layout)
+  def id: Maybe[Text] = data.mm(_.id)
 
   def selectDynamic(key: String): List[Data] throws MissingValueError =
     data.option.getOrElse(throw MissingValueError(key.show)).selectDynamic(key)
@@ -30,29 +32,57 @@ case class Node(data: Maybe[Data] = Unset, meta: Maybe[Meta] = Unset) extends Dy
   def has(key: Maybe[Text]): Boolean = data.mm(_.has(key)).or(false)
   
   def untyped: Node =
-    val data2 = data.mm { data => Data(data.key, children = data.children.map(_.untyped)) }
+    val data2 = data.mm { data => Data(data.key, children = data.children.map(_.untyped), index = data.index) }
     Node(data2, meta)
   
   def uncommented: Node =
-    val data2 = data.mm { data => Data(data.key, children = data.children.map(_.uncommented), Layout.empty, data.schema) }
+    val data2 = data.mm { data => Data(data.key, children = data.children.map(_.uncommented), Layout.empty, data.schema, data.index) }
     Node(data2, Unset)
 
   def wiped: Node = untyped.uncommented
 
 object Doc:
   def apply(nodes: Node*): Doc = Doc(IArray.from(nodes), Schema.Free, 0)
+  
+  def apply(children: IArray[Node], schema: Schema, margin: Int): Doc =
+    val index = children.zipWithIndex.foldLeft(Map[Text, Int]()):
+      case (map, (child, idx)) => child.mm(_.id).fm(map)(map.updated(_, idx))
+    
+    Doc(children, schema, margin, index)
 
-case class Doc(children: IArray[Node], schema: Schema, margin: Int) extends Indexed:
+
+case class Doc(children: IArray[Node], schema: Schema, margin: Int, index: Map[Text, Int]) extends Indexed:
   override def toString(): String = s"[[${children.mkString(" ")}]]"
   
   override def equals(that: Any) = that.matchable(using Unsafe) match
-    case that: Doc =>
-      schema == that.schema && margin == that.margin && children.size == that.children.size &&
-          children.indices.forall { i => children(i) == that.children(i) }
-    case _ => false
+    case that: Doc => schema == that.schema && margin == that.margin && children.sameElements(that.children)
+    case _         => false
 
-  override def hashCode: Int =
-    children.foldLeft(margin.hashCode ^ schema.hashCode ^ children.size.hashCode)(_ ^ _.hashCode)
+  override def hashCode: Int = children.toSeq.hashCode ^ schema.hashCode ^ margin.hashCode
+
+
+  def merge(input: Doc): Doc =
+    def cmp(x: Node, y: Node): Boolean = if x.unset || y.unset then x == y else x.id == y.id
+
+    def recur(original: IArray[Node], updates: IArray[Node]): IArray[Node] =
+      val diff = Diff.diff[Node](children, updates, cmp)
+      
+      val nodes2 = diff.changes.foldLeft(List[Node]()):
+        case (nodes, Change.Del(left, value))         => nodes
+        case (nodes, Change.Ins(right, value))        => value :: nodes
+        case (nodes, Change.Keep(left, right, value)) =>
+          val orig: Node = original(left)
+          val origData: Data = orig.data.or(???)
+          
+          if orig.id.unset || updates(right).id.unset then orig :: nodes
+          else
+            val children2 = recur(origData.children, updates(right).data.or(???).children)
+            // FIXME: Check layout remains safe
+            orig.copy(data = origData.copy(children = children2)) :: nodes
+      
+      IArray.from(nodes2.reverse)
+    
+    copy(children = recur(children, input.children))
 
 
   def as[T: Codec]: T = summon[Codec[T]].deserialize(children)
@@ -65,10 +95,21 @@ case class Doc(children: IArray[Node], schema: Schema, margin: Int) extends Inde
     val writer: ji.Writer = ji.StringWriter()
     Bin.write(writer, this)
     writer.toString().show
-    
 
-case class Data(key: Text, children: IArray[Node] = IArray(), layout: Layout = Layout.empty, schema: Schema = Schema.Free)
+  def serialize: Text =
+    val writer: ji.Writer = ji.StringWriter()
+    Printer.print(writer, this)
+    writer.toString().show
+
+
+case class Data(key: Text, children: IArray[Node] = IArray(), layout: Layout = Layout.empty, schema: Schema = Schema.Free, index: Map[Text, Int] = Map())
 extends Indexed:
+
+  def id: Maybe[Text] = schema.subschemas.find(_.schema.arity == Arity.Unique) match
+    case Some(Schema.Entry(name: Text, schema)) =>
+      safely(selectDynamic(name.s)).mm(_.headOption.maybe).mm(_.key)
+    case _ => key
+  
   def paramCount: Int = layout.fm(0)(_.params)
   
   override def equals(that: Any) = that.matchable(using Unsafe) match
@@ -91,6 +132,7 @@ trait Indexed extends Dynamic:
   def children: IArray[Node]
   def schema: Schema
   def paramCount: Int
+  def index: Map[Text, Int]
 
   private lazy val array: IArray[Data] = IArray.from(children.map(_.data).sift[Data])
   

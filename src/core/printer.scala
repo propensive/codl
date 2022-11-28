@@ -1,5 +1,8 @@
 package cellulose
 
+import rudiments.*
+import gossamer.*
+
 import java.io as ji
 
 import language.experimental.captureChecking
@@ -10,23 +13,45 @@ object Printer:
     def recur(node: Node, indent: Int): Unit = node match
       case Node(data, meta) =>
         data match
-          case Data(key, children, layout, schema) =>
+          case Data(key, children, layout, schema, index) =>
+            meta.mm: meta =>
+              for i <- 0 until meta.blank do out.write('\n')
+              meta.comments.foreach: comment =>
+                for i <- 0 until indent do out.write(' ')
+                out.write("# ")
+                out.write(comment.s)
+                out.write('\n')
+            
             for i <- 0 until indent do out.write(' ')
             out.write(key.s)
            
             schema match
               case Field(_, _) =>
                 children.foreach:
-                  case Node(Data(key, _, _, _), _) =>
+                  case Node(Data(key, _, _, _, _), _) =>
                     out.write(' ')
                     out.write(key.s)
                 out.write('\n')
               case Struct(_, _) =>
-                children.take(layout.params).foreach:
-                  case Node(Data(key, _, _, _), _) =>
+                val ps = if layout.multiline then children.take(layout.params - 1) else children.take(layout.params)
+                ps.foreach:
+                  case Node(Data(key, _, _, _, _), _) =>
                     out.write(' ')
                     out.write(key.s)
-            
+                
+                meta.mm(_.remark).mm: remark =>
+                  out.write(" # ")
+                  out.write(remark.s)
+                
+                if layout.multiline then
+                  out.write('\n')
+                  if children.length >= layout.params then children(layout.params - 1) match
+                    case Node(Data(key, _, _, _, _), _) =>
+                      for i <- 0 until (indent + 4) do out.write(' ')
+                      for ch <- key.chars do
+                        out.write(ch)
+                        if ch == '\n' then for i <- 0 until (indent + 4) do out.write(' ')
+
                 out.write('\n')
                 children.drop(layout.params).foreach(recur(_, indent + 2))
       
