@@ -39,12 +39,20 @@ refocus() {
   address="${address:2}"
   parent="${parent:2}"
   nodeTypes["$file:$address"]="${nodeType}"
-  values["$file:$address"]+=" ${nodeArgs[@]:1}"
-  childNodes["$file:$parent"]+=" $file:$address"
+  
+  if [ "${values["$file:$address"]}" = "" ]
+  then values["$file:$address"]="${nodeArgs[*]:1}"
+  else values["$file:$address"]+=" ${nodeArgs[*]:1}"
+  fi
+
+  if [ "${childNodes["$file:$parent"]}" = "" ]
+  then childNodes["$file:$parent"]="$file:$address"
+  else childNodes["$file:$parent"]+=" $file:$address"
+  fi
 }
 
 parseLine() {
-  local -i level abort
+  local -i level abort lineNo
   local -a atoms
   local line IFS id file
   file="$1"
@@ -55,19 +63,23 @@ parseLine() {
   while [ $abort = 0 ]
   do
     case "$line" in
-      *( )#*)
+      *( )#*|*( ))
         abort=1
+        lineNo=$((lineNo+1))
         ;;
       '  '*)
         level=$((level+1))
         line="${line:2}"
+        lineNo=$((lineNo+1))
         ;;
       *)
         read -ra atoms <<< "$line"
+        nonEmpty "${identifier[${atoms[0]}]}" "Unrecognized identifier: ${atoms[0]} in $file line $lineNo"
         id="${atoms[${identifier[${atoms[0]}]}]}"
         nonEmpty "$id" "Unrecognized atom: '${atoms[0]}'"
         refocus $level "$id" "$file" "${atoms[0]}" "${atoms[@]:1}"
         abort=1
+        lineNo=$((lineNo+1))
         ;;
     esac
   done
@@ -81,9 +93,10 @@ parseCodl() {
   done < "$file"
 }
 
-children() {
-  local filter node
+childPaths() {
+  local filter node IFS
   local -a nodes
+  IFS=$' '
   node="$1"
   filter="$2"
   read -ra nodes <<< "${childNodes[$node]}"
@@ -93,6 +106,30 @@ children() {
     then printf "%s\n" "$node"
     elif [ "$filter" = "${nodeTypes[$node]}" ]
     then printf "%s\n" "$node"
+    fi
+  done
+}
+
+children() {
+  local filter node IFS
+  local -a nodes
+  local -i prefix
+  IFS=$' '
+  node="$1"
+  prefix="${#node}"
+  filter="$2"
+  
+  if [ "${node:0-1}" != ":" ]
+  then prefix=$((prefix+1))
+  fi
+  
+  read -ra nodes <<< "${childNodes[$node]}"
+  for node in "${nodes[@]}"
+  do
+    if [ "$filter" = "" ]
+    then printf "%s\n" "${node:$prefix}"
+    elif [ "$filter" = "${nodeTypes[$node]}" ]
+    then printf "%s\n" "${node:$prefix}"
     fi
   done
 }
