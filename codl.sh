@@ -30,8 +30,7 @@ refocus() {
     difference=$((difference-1))
   fi
   if [ $difference = 1 ]
-  then
-    focus+=("$nodeId")
+  then focus+=("$nodeId")
   fi
   
   printf -v address ".%s" "${focus[@]}"
@@ -86,10 +85,11 @@ parseLine() {
 }
 
 parseCodl() {
-  local file
+  local file IFS
   file="$1"
+  filename="$file"
   while IFS=$'\n' read -r line
-  do parseLine "$file" "$line"
+  do parseLine "$filename" "$line"
   done < "$file"
 }
 
