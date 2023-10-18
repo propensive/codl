@@ -25,8 +25,8 @@
 20. If the first character after the prefix is a hash (`#`, `\u0023`), that line is a _comment line_ and contains no
     data.
 
-22. If a word is equal to a single hash character, that word and every subsequent word on the same line are a _trailing
-    comment_ and are not parameters.
+22. If a word is equal to a single hash character, that word and every subsequent word on the same line are a _remark_
+    and are not parameters.
 23. A trailing 
 
 
