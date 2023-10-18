@@ -1,0 +1,12 @@
+#!/bin/bash
+
+number() {
+  printf '\\u%04x' $(($1+32))
+}
+
+string() {
+  number ${#1}
+  printf "%s" "$1"
+}
+
+printf "$(string 'Hello world!')"
