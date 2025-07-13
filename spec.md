@@ -48,26 +48,52 @@ untyped tree -> typed tree
 
 ## Specification
 
+The process of interpreting a CoDL _document_ is described as a pipeline of five
+stages, which process input as a sequence of bytes:
+
+ 1. decoding,     into a sequence of characters
+ 2. segmentation, into a sequence of lines
+ 3. tokenization, into a sequence of nodes
+ 4. parsing,      into a tree of sequences of strings
+ 5. typing,       into a tree of typed values
+
+Implementations of CoDL interpreters MAY follow this sequence of steps, but
+alternative implementations which produce the same data structures are equally
+valid.
+
+Implementations SHOULD be able to process input as either a sequence of bytes or
+a sequence of characters, and SHOULD produce output structured as a tree of
+sequences of strings or a tree of typed values. However, some implementations
+MAY omit one input format and/or one output format while remaining useful.
+
+These stages serve as an instructive way to describe the format.
+
 ### Decoding
 
-A CoDL document MAY be encoded as bytes using either UTF-8 or UTF-16. If UTF-16
-is used, the first two bytes MUST be a byte order mark (BOM) of either `0xFF 0xFE` or
-`0xFE 0xFF`. The interpretation of bytes as a sequence of characters MUST NOT
-include the BOM character at the start of the sequence.
+Decoding transforms a sequence of bytes into a sequence of Unicode characters.
 
-A CoDL document is serialized as a sequence of Unicode codepoints. A document may contain
-any Unicode character, including characters outside the ASCII range, outside the
-Basic Multilingual Plane and nonprintable characters. However, it is RECOMMENDED
-that schemas use only ASCII characters.
+A sequence of bytes representing the character sequence of a CoDL document MUST
+use either UTF-8 or UTF-16. If UTF-16 is used, the first two bytes MUST be a
+byte order mark (BOM) of either `0xFF 0xFE` or `0xFE 0xFF`. The sequence of
+characters MUST exclude the BOM character from the start of the sequence.
+
+If the last character of the sequence is not `LINE FEED`, then a `LINE FEED`
+character MUST be appended to the sequence of characters.
+
+A document may contain any Unicode character, including characters outside the
+ASCII range, outside the Basic Multilingual Plane and nonprintable characters.
+However, it is RECOMMENDED that documents only include.
 
 A sequence of bytes that does not represent a valid Unicode codepoint MUST produce
 an error.
 
-### Line Segmentation
+### Segmentation
 
-Documents are split into a sequence of _lines_, each of which is a sequence of Unicode
-characters. The first line ends immediately before the first occurrence of the
-character `LINE FEED` (code point `U+000A`).
+Segmentation transforms a sequence of characters into a sequence of _lines_.
+
+Documents are split into a sequence of _lines_, each of which is a sequence of
+Unicode characters. The first line ends immediately before the first occurrence
+of the character `LINE FEED` (code point `U+000A`).
 
 Each subsequent line begins immediately after the previous `LINE FEED`
 character, and ends immediately before the next `LINE FEED` character. In the
@@ -77,47 +103,61 @@ The character `CARRIAGE RETURN` (code point `U+000D`) has no special meaning,
 and should be included in the sequence of characters comprising a line.
 
 An empty line or a line containing no character other than `SPACE` (code point
-`U+0020`) is called a _whitespace line_. Other lines are called _data lines_,
-which are further distinguished as _node lines_ which declare nodes, and _value
-lines_ which typically specify values that span multiple lines.
+`U+0020`) is called a _whitespace line_. Other lines are called _content lines_.
+
+The first line MAY begin with the character sequence, `NUMBER SIGN`,
+`EXCLAMATION MARK` (code points `U+0023`, `U+0021`). In such case, the remainder
+of the line following these two characters is captured as a _shebang command_,
+and the entire line is omitted from the output sequence of lines, and hereafter,
+_first line_ refers to the line immediately following the shebang command.
 
 ### Tokenization
 
-The first data line in a document MAY contain one or more `SPACE` characters
-before the first non-`SPACE` character. These `SPACE` characters are called the
-_margin_ of the document, and remains constant for every line. Every data line
-in the document MUST NOT start with fewer `SPACE` characters than the margin, or
-an error is produced.
+The first content line in a document MAY contain one or more `SPACE` characters
+before the first non-`SPACE` character. These number of `SPACE` characters is
+called the _margin_ of the document. The margin remains constant for every line.
+Every content line in the document MUST NOT start with fewer `SPACE` characters
+than the margin, or an error is produced.
 
-It is RECOMMENDED to use an zero-length margin unless the CoDL is embedded
-within another language.
+It is RECOMMENDED to use a margin of zero unless the CoDL is embedded within
+another language.
 
-Whitespace lines may contain any number of `SPACE` characters.
+Whitespace lines may be empty or contain any number of `SPACE` characters.
 
-The _indentation_ of a data line is the number equal to one half of the number
-of `SPACE` characters following the margin. The first data line therefore has an
-indentation of zero.
+The _indentation_ of a content line is the number equal to one half of the number
+of consecutive `SPACE` characters following the margin. The first content line
+therefore has an indentation of zero.
 
-The first data line in a document is a _node line_.
+The first content line in a document is a _node line_.
 
-Each subsequent data line is determined to be a value line if its indentation is
-at least tmo greater than the previous node line.
+Each subsequent content line is determined to be a _value line_ if its
+indentation is at least tmo greater than the previous node line. The content in
+a value line is the sequence of characters of the _content line_ with the first
+_n_ `SPACE` characters removed, where _n_ is given by,
 
-If a data line has an indentation less than, equal to, or exactly one greater
-than the indentation of the previous node line, then it is a node line.
+   n = margin + 2*indentation + 4
+
+If a content line has an indentation less than the previous node line, equal to
+the previous node line, or exactly one greater than the previous node line, then
+it is a node line.
 
 The indentation of a node line MUST be an integer, or an error is produced.
 
-A node line is tokenized as an integer indentation value and a non-empty
-sequence of strings. The first token is called the _keyword_, and starts at the
+A node line is tokenized as an integer indentation, a _keyword_ and zero or more _parameters_.
+The first token is called the _keyword_, and starts at the
 first non-`SPACE` character on the line, and ends immediately before the next
 `SPACE` character, or the end of the line.
 
-If the keyword is equal to the one-character string `#`, then the characters after the `SPACE` after the keyword are interpreted as a _comment_.
+If the keyword is equal to the one-character string `#`, then the characters
+after the `SPACE` after the keyword are a _comment_ which begins at the first
+non-`SPACE` character following the keyword, `#`, and continues to the end of
+the line.
 
-For any other
+For any other keyword,
 
 ### Parsing
+  The node lines are processed in order.
+
 
 ### Typing
 
@@ -145,10 +185,10 @@ or it may be empty.
 Each line begins with zero or more SPACE characters. The number of SPACE
 characters before the first non-space character is called the _margin_ of that
 line. Empty lines and Lines which contain only SPACE characters are _whitespace
-lines_. Lines which are not _whitespace lines_ are _data lines_.
+lines_. Lines which are not _whitespace lines_ are _content lines_.
 
 The _initial prefix_ is the number of SPACE characters before the first non-SPACE character on the
-first data line.
+first content line.
 
 2.  A _line_ is a sequence of zero or more characters beginning at the start of the document or the character
     immediately after a newline (`\u000A`) and ending at the end of the document or the character immediately before a
@@ -156,34 +196,7 @@ first data line.
 
 FIXME: Carriage returns?
 
-4.  A _data line_ is any line which contains any characters other than space (` `, `\u0020`), unless it is a comment
+4.  A _content line_ is any line which contains any characters other than space (` `, `\u0020`), unless it is a comment
     line (see below).
 
-5.  The _prefix_ of a data line is the space characters before the first non-space character.
-
-6.  The _initial line_ is the first data line.
-7.  The _initial prefix_ is the prefix of the initial line.
-8.  Every data line must have a prefix length greater than or equal to the initial prefix length.
-9.  The result of subtracting the initial prefix length from the prefix of every line must be an integer multiple of
-    two.
-10. The _indentation_ of a data line is one half of the result of subtracting the initial prefix from the prefix.
-11. The indentation of a data line may be at most two greater than the indentation of the previous line.
-12. The _data_ is the the series of characters of a data line after the prefix.
-13. The _words_ of a data line are one or more sequences of non-space characters separated by one or more space
-    characters.
-14. The _keyword_ is the first word of a data line.
-15. The _parameters_ are the zero or more words following the keyword which are not comments (see below).
-16. The keyword and parameters declare a _node_.
-17. The initial line declares the _root node_.
-18. With the exception of the root node, each node has a _parent_ and is correspondingly a _child_ of that node.
-19. The parent, _p_, of a node other than the root node, _n_, is declared on the last line preceding _n_ whose
-    indentation is exactly one less than _n_'s indentation.
-20. If the first character after the prefix is a hash (`#`, `\u0023`), that line is a _comment line_ and contains no
-    data.
-
-22. If a word is equal to a single hash character, that word and every subsequent word on the same line are a _remark_
-    and are not parameters.
-23. A trailing
-
-
-FIXME: Adjacent comments intented differently
+5.  The _prefix_ of a content line is the space characters before the first non-space character.
