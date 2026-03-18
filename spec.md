@@ -12,16 +12,35 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **
 
 ## 3. Overview
 
-CODL is a Unicode, character-based data representation language for ordered tree-structured data.
+CODL is a Unicode, character-based language for ordered, tree-structured data represented as strings, and typed according to a schema.
 
-Although CODL presents data as an ordered tree, whether that sibling order is semantically meaningful is outside the scope of the core format. A consuming schema or application MAY assign meaning to sibling order, or MAY treat it as insignificant. In this respect, CODL is similar to XML.
+CODL presents data as an _ordered_ tree, however an application consuming CODL MAY choose to assign meaning to sibling order, or MAY treat it as insignificant. In this respect, CODL is similar to XML.
 
 CODL distinguishes between:
 
-- a **presentation model**, which preserves comments, tabulations, remarks, interpreter directives, pragma metadata, atom presentation form, and document structure sufficiently for faithful reserialization, and
+- a **presentation model**, which preserves comments, interpreter directives, pragma metadata, atom presentation form, most whitespace and document structure sufficiently for faithful reserialization, and
 - a **semantic model**, which is derived from the presentation model using a schema.
 
-This document primarily specifies the presentation model and the parsing rules by which CODL text is transformed into that model.
+This document specifies CODL source, its parsing into the presentation model, the definiton of schemas and translation between presentation model and semantic model by means of a schema.
+
+## Abstract
+
+Structured data is widely stored and exchanged in formats such as JSON, XML and YAML. These formats may be read and written by humans and machines, with varying convenience for human editors and parser implementors.
+
+For applications which require the exchange of information through a data language across the human/machine boundary, certain features are desirable, particularly on the side of human producers and consumers.
+
+- Details like formatting and plain-language comments should not be left intact after machine modifications
+- AI agents, with some characteristics of humans and machines, will increasingly be responsible for editing data files
+- Direct machine-to-machine exchange should not be unnecessarily verbose or facilitate ambiguity
+- Character escaping, where data language syntax conflicts with content, should be avoided or minimized
+- For line-based version control, insignificant changes should not leak onto lines that are semantically unchanged
+- Parsing should be strict to avoid ambiguity, but one error should not preclude the detection of others
+- Over time, data formats may evolve and support ad-hoc extensions which should remain compatible, but backwards and forwards compatibility should be clear and predictable
+- Validation rules for strings may be too complex to represent in a pure data format, but should still be applied
+- Strictly-typed and checked values limit the possibility of exchanging invalid data
+- Editors and IDEs are widely used and can provide immediate feedback to human editors on formatting errors, type errors and validation errors
+
+CODL addresses all of these features.
 
 ## 4. Character Encoding
 
@@ -29,7 +48,7 @@ CODL is defined over Unicode code points.
 
 When serialized as binary data, a CODL document MUST be encoded as UTF-8.
 
-CODL uses U+000A LINE FEED (`LF`) as its primary line-ending character. Carriage return (`CR`, U+000D) is also permitted under the following rules.
+CODL uses `U+000A` LINE FEED (`LF`) as its primary line-ending character. Carriage return (`CR`, `U+000D`) is also permitted under the following rules.
 
 A `CR` appearing anywhere in a CODL document outside a literal atom payload MUST be immediately followed by `LF` (**P-023**).
 
@@ -48,6 +67,8 @@ A UTF-8 byte order mark MUST NOT appear in a CODL document (**P-001**).
 
 ### 4.1 Recommendations
 
+FIXME: each of these recommendations should be moved to the relevant part of the document.
+
 The following are recommendations rather than validity rules:
 
 - visually misleading code points, such as zero-width characters, SHOULD be avoided
@@ -55,21 +76,21 @@ The following are recommendations rather than validity rules:
 - although non-ASCII keywords are permitted, ASCII keywords are generally RECOMMENDED for interoperability and readability
 - CODL is not intended primarily as a binary-data format, even though it can represent content containing non-printing code points
 
-## 5. Fundamental Characters and Terms
+## 5. Significant Characters and Terms
 
 The following characters have syntactic significance in CODL:
 
-- U+000A LINE FEED (`LF`)
-- U+0020 SPACE
+- `U+000A` LINE FEED (`LF`)
+- `U+0020` SPACE
 - the configured comment marker (§8.3)
 
 A **line** is a contiguous, potentially empty sequence of non-linefeed characters delimited by linefeed characters or by the start or end of the file.
 
-A **soft space** is exactly one U+0020 SPACE character.
+A **soft space** is exactly one `U+0020` SPACE character.
 
-A **hard space** is two or more consecutive U+0020 SPACE characters.
+A **hard space** is two or more consecutive `U+0020` SPACE characters.
 
-A **blank line** is a line containing only U+0020 SPACE characters, or no characters at all.
+A **blank line** is a line containing only `U+0020` SPACE characters, or no characters at all.
 
 Blank lines have no defined indent.
 
@@ -98,7 +119,7 @@ interface Pragma {
 
 ## 7. Interpreter Directive
 
-If the first two characters of the document are `#!`, then the first physical line of the document is an interpreter directive line.
+If the first two characters of the document are `#!`, then the first physical line of the document is an interpreter directive line. If not, the interpreter directive is absent.
 
 The interpreter directive payload is the content of the first line after the leading `#!`, up to but excluding the terminating newline.
 
@@ -131,7 +152,7 @@ The version parameter MUST have the form `x.y`, where `x` and `y` are non-negati
 The following rules govern how the version number changes across revisions of this specification:
 
 - A revision that accepts documents which would not be accepted by the previous revision MUST increment the major version.
-- A revision that accepts a previously accepted document but assigns it a different interpretation MUST increment the major version.
+- A revision that accepts a previously accepted document but assigns it a different interpretation in its presentation or semantic model MUST increment the major version.
 - A revision that rejects a document that would have been accepted by an earlier revision MUST keep the same major version and increment the minor version.
 
 The schema identifier parameter is optional.
@@ -140,9 +161,9 @@ The comment marker parameter is optional.
 
 If the comment marker parameter is present, the schema identifier parameter MUST also be present (**P-005**).
 
-The comment marker MUST be a single ASCII symbolic character. It MUST NOT be a space, newline, letter, or digit (**P-006**).
+The comment marker MUST be a single ASCII symbolic character. It MUST NOT be SPACE, LINEFEED, CARRIAGE RETURN, a letter, a control character or a digit (**P-006**).
 
-The default comment marker is `#`, used whenever no pragma specifies a different one.
+The default comment marker is `#`, used unless the pragma or the document schema specifies a different one.
 
 ### 8.1 Schema Identifier
 
