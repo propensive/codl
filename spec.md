@@ -55,7 +55,7 @@ CODL distinguishes between:
   reserialization, and
 - a **semantic model**, which is derived from the presentation model using a schema.
 
-This document specifies CODL source, its parsing into the presentation model, the definiton of
+This document specifies CODL source, its parsing into the presentation model, the definition of
 schemas and translation between presentation model and semantic model by means of a schema.
 
 ## 4. Character Encoding
@@ -304,7 +304,7 @@ A document containing no non-blank lines is invalid (**E107**).
 If the document begins with an interpreter directive, the **margin** is zero. Otherwise, the
 **margin** is the sequence of leading spaces on the first non-blank line.
 
-Every non-blank line in the document MUST begin with at the margin, optionally followed by
+Every non-blank line in the document MUST begin with the margin, optionally followed by
 additional spaces. A non-blank line which does not begin with the margin is invalid (**E108**).
 
 For each non-blank line, the number of spaces following the margin MUST be even (**E109**). The
@@ -386,17 +386,18 @@ If the sigil is followed immediately by the end of line, the comment payload is 
 If the sigil is followed by a soft space, the comment payload begins at the first character after
 that soft space and continues unchanged to the end of the line.
 
-A word such as `#foo` is never a sigil.
+A word such as `#foo` (the sigil concatenated with other characters) is not a comment keyword.
 
 The payload of a comment is not further parsed. Spaces inside the payload are preserved exactly.
 
 Comments participate in indentation and structural ordering as line-level nodes. Comments cannot
 have children.
 
-A comment line MUST be immediately preceded by a blank physical line, unless it is the first
-non-blank physical line of the children sequence (i.e., the first non-blank physical line after any
-interpreter directive and pragma) (**E111**). Because a blank line terminates any active tabulated
-block, this rule ensures that comments cannot appear inside tabulated blocks.
+A comment line MUST be immediately preceded by one of the following: a blank line, another comment
+line, the start of the document (i.e., a comment may be the very first non-blank line), or a line at
+a lesser indent (i.e., a comment may appear after a compound if it is indented one level deeper than
+that compound) (**E111**). Because a blank line terminates any active tabulated block, this rule
+ensures that comments cannot appear inside tabulated blocks.
 
 A comment is **attached** to the immediately following node if there is no blank line between the
 comment and that node. The following node may be a compound node, or a tabulation line (in which
@@ -434,13 +435,13 @@ points. The final column (i = n) is unbounded.
 **Column headings.** Each marker M_i is followed by a **column heading**, parsed as follows:
 
 - If M_i is immediately followed by end of line, the heading is the empty string.
-- If M*i is immediately followed by exactly one space (a soft space), the heading is the text
+- If M\_i is immediately followed by exactly one space (a soft space), the heading is the text
   beginning after that space and ending immediately before the first hard space encountered, or at
   end of line if no hard space follows. If the heading ends at a hard space, the character
-  immediately after that hard space MUST be the sigil (i.e., M*{i+1}) (**E122**). The heading text
+  immediately after that hard space MUST be the sigil (i.e., M\_{i+1}) (**E122**). The heading text
   MUST NOT itself contain the sigil (**E122**).
-- If M*i is immediately followed by two or more spaces (a hard space), the character immediately
-  after those spaces MUST be the sigil (i.e., M*{i+1}), and the heading for M_i is the empty string
+- If M\_i is immediately followed by two or more spaces (a hard space), the character immediately
+  after those spaces MUST be the sigil (i.e., M\_{i+1}), and the heading for M\_i is the empty string
   (**E122** if not).
 - Any other character immediately following M_i (including a non-space character) is invalid
   (**E122**).
@@ -569,18 +570,19 @@ indentation and blank-line structure.
 ## 14. Parent, Child, and Peer Relations
 
 For each non-blank line after the first non-blank line, excluding lines consumed by source atoms or
-literal atoms:
+literal atoms, let the **previous compound line** be the most recent preceding non-blank compound
+line (i.e., excluding comment lines and tabulation lines):
 
-- if its indent is exactly one greater than that of the immediately preceding non-blank line, it is
-  a child of the immediately preceding non-blank line
-- if its indent is equal to that of the immediately preceding non-blank line, it is a peer of the
-  immediately preceding non-blank line
-- if its indent is less than that of the immediately preceding non-blank line, it closes one or more
-  open compounds and becomes a peer of the nearest preceding line with the same indent; if no
-  preceding line has the same indent, the document is invalid (**E112**)
+- if its indent is exactly one greater than that of the previous compound line, it is a child of
+  the previous compound line
+- if its indent is equal to that of the previous compound line, it is a peer of the previous
+  compound line
+- if its indent is less than that of the previous compound line, it closes one or more open
+  compounds and becomes a peer of the nearest preceding compound line with the same indent; if no
+  preceding compound line has the same indent, the document is invalid (**E112**)
 
-A line may not have indent greater than one plus the indent of the immediately preceding non-blank
-line, except where the source-atom or literal-atom rules apply (**E113**).
+A line may not have indent greater than one plus the indent of the previous compound line, except
+where the source-atom or literal-atom rules apply (**E113**).
 
 Comments and tabulations follow the same indentation and peer/child rules as compounds during
 parsing, except that comments and tabulations cannot have children. A line that would become a child
@@ -647,38 +649,37 @@ The opening literal-atom line is not part of the payload.
 The remainder of that opening line, from its first content character up to but excluding its
 terminating newline, is the delimiter.
 
-The delimiter MUST consist only of ASCII characters other than space and newline.
+The delimiter MUST consist only of ASCII characters other than whitespace (spaces, linefeeds,
+carriage returns, tabs, and other ASCII control characters).
 
 If the delimiter is empty, the line does not begin a literal atom.
 
-The literal payload begins immediately after the newline terminating the delimiter line.
+The literal payload begins immediately after the `LF` that terminates the delimiter line.
 
-The payload continues verbatim until a subsequent physical line whose entire line is exactly equal
-to the delimiter.
+The closing delimiter is identified by scanning for a `LF` immediately followed by the exact
+delimiter characters and then immediately followed by another `LF`. The closing delimiter match is
+performed against the raw byte stream, without any margin stripping or indentation processing. The
+payload is everything between the opening `LF` (exclusive) and the closing `LF` before the
+delimiter (exclusive). The `LF` after the closing delimiter terminates the literal atom.
 
-The closing delimiter line MUST be followed by a newline.
-
-The closing delimiter line is not part of the payload.
-
-The single newline immediately preceding the closing delimiter line is also not part of the payload.
-
-Accordingly, an empty literal payload is permitted.
+Accordingly, an empty literal payload (a `LF` immediately followed by the delimiter and a `LF`) is
+permitted.
 
 The literal payload preserves leading spaces, trailing spaces, internal spaces, and all other
 content exactly.
 
-If the end of file is reached before a closing delimiter line is encountered, the document is
-invalid (**E117**).
+If the end of file is reached before a closing delimiter is encountered, the document is invalid
+(**E117**).
 
 The sigil has no special meaning inside a literal atom.
 
 The line-ending mode rules of §4 do not apply inside a literal atom payload. `CR` characters within
-the payload are preserved exactly as-is and carry no special meaning; only the `LF` that terminates
-each payload line is recognised as a line separator.
+the payload are preserved exactly as-is and carry no special meaning; only `LF` is recognised as a
+line separator for the purpose of identifying the closing delimiter.
 
-Literal atom payload lines are raw: they are not subject to any CODL parsing rules. Indentation,
-trailing spaces, and all other content are preserved exactly. The only termination condition is the
-occurrence of a line whose entire content is exactly equal to the delimiter.
+Literal atom payload content is raw: it is not subject to any CODL parsing rules. Indentation,
+trailing spaces, and all other content are preserved exactly. The only termination condition is a
+`LF` immediately followed by the delimiter and another `LF`.
 
 Literal-atom lines are not compounds and are never members of a tabulated block. A literal atom
 always terminates any surrounding tabulated block.
@@ -821,7 +822,8 @@ tree is constructed by:
    - If the type assigned to C is `Struct` or `Flag`, create a `Node` with that type and `children`
      constructed by recursing into C's children (empty for `Flag`).
    - If the type assigned to C is `Primitive`, create a `Value` with that type and `text` equal to
-     the compound's single inline atom text.
+     the compound's inline atom text if present, or the empty string if the compound has no inline
+     atoms.
 
 3. **Atoms.** For each atom A assigned to the current node (in order):
    - If the assigned type is `Primitive`, create a `Value` with that type and `text` equal to A's
@@ -878,7 +880,13 @@ Inline atoms may be assigned types from that ordered sequence so long as the app
 specifications are non-repeatable.
 
 If an atom position is assigned to a repeatable child type, then all subsequent inline atoms on that
-same compound line must be assigned to that same repeatable child type.
+same compound line must be assigned to that same repeatable child type. Consequently, a repeatable
+`Primitive` member may only consume atoms if it is the last atom-assignable member in member order;
+no further atoms may be assigned to subsequent members.
+
+Similarly, once atoms are assigned to a `Sum` member (whose variants are all `Flag`), no further
+atoms may be assigned to subsequent members, because each atom is matched against the Sum's variant
+keywords and the atom phase cannot advance past a `Sum` member except by skipping it entirely.
 
 For a `repeatable` member, occurrences may be split across both of the following:
 
@@ -891,7 +899,7 @@ Remark lines do not affect this rule.
 
 ### 19.3 Error Taxonomy
 
-Errors are identified by a code of the form **P-NNN** (parsing), **S-NNN** (schema), or **V-NNN**
+Errors are identified by a code of the form **E1xx** (parsing), **E2xx** (schema), or **E3xx**
 (validation). Parsing errors indicate violations of the presentation-model syntax. Schema errors
 indicate a malformed schema. Validation errors indicate that a document does not conform to its
 schema.
@@ -1347,7 +1355,7 @@ only the document root encoding (§20.4.4). This is the general method for hashi
 value.
 
 When used in schema identifiers (§8.1), the hash is represented as a BASE64-URL-encoded (no padding)
-string of 44 characters.
+string of 43 characters.
 
 #### 20.4.1 Integer Encoding
 
@@ -1445,7 +1453,7 @@ the signature is computed as follows:
 Emit the signature as `31 + n` bytes, most-significant byte first.
 
 **Correctness property.** Because each shift is only 8 bits wide but each hash is 256 bits wide, the
-lowest 8 bits of S are determined solely by the last hash h*{n−1}. After XORing h*{n−1} out of S and
+lowest 8 bits of S are determined solely by the last hash h\_{n−1}. After XORing h\_{n−1} out of S and
 shifting right by 8 bits, the lowest 8 bits are determined solely by h\_{n−2}. This property holds
 at every step, enabling unambiguous decoding.
 
@@ -1612,8 +1620,8 @@ by iterating the struct's members in member order:
 1. Starting from the first member, each non-repeatable `Product` member whose type is `Primitive` is
    serialized as an inline atom, in member order, for as long as consecutive members satisfy this
    condition.
-2. If the next member after the initial run of non-repeatable primitives is a `Sum` (all `Flag`
-   variants), each present flag is serialized as an inline atom.
+2. If the next member after the initial run of non-repeatable primitives is a `Sum`, each present
+   flag is serialized as an inline atom.
 3. Otherwise, if the next member is a `repeatable` `Product` whose type is `Primitive`, each
    occurrence is serialized as an inline atom.
 4. All remaining children — including any `Product` members whose type is `Struct`, any `Sum`
@@ -1719,11 +1727,6 @@ The following topics remain underspecified or unresolved:
   typed by the `codl-schema` schema, errors in a schema document are ordinary parsing and
   validation errors reported against that schema. No additional error codes are believed to be
   needed, but this has not been exhaustively verified.
-
-- **Empty-string primitives.** A `Primitive` atom whose text is the empty string is syntactically
-  valid (an atom with no content after the keyword). What is missing: whether an empty string is a
-  valid input to a helper method, whether it is distinguishable from an absent member, and how it
-  interacts with `Primitive.default`.
 
 - **Canonical serialization.** Canonical document serialization is defined in §22.3. No further
   specification is believed to be needed, but the interaction between canonical serialization and
