@@ -5,11 +5,11 @@
 CODL is a line-oriented, tree-structured data language designed for data that is read, written and
 maintained by both humans and machines.
 
-CODL defines a **presentation model** that faithfully preserves formatting, comments and document
-structure through programmatic round-trips, and a schema-driven **semantic model** that ascribes
-types to every node in the tree. The two models are connected by a deterministic type-assignment
-algorithm, and a compact binary encoding (BCODL) provides an unambiguous serialization of the
-semantic model.
+CODL defines a **presentation model** that preserves comments, document structure and user data
+through programmatic round-trips, while permitting minor normalizations such as collapsing
+space-only blank lines to empty lines. A schema-driven **semantic model** ascribes types to every
+node in the tree. The two models are connected by a deterministic type-assignment algorithm, and a
+compact binary encoding (BCODL) provides an unambiguous serialization of the semantic model.
 
 The design of CODL is motivated by the following goals:
 
@@ -79,8 +79,8 @@ Once the mode is established, every subsequent `LF` outside a literal atom paylo
 it: in CRLF mode every `LF` MUST be preceded by `CR`; in LF mode `CR` MUST NOT appear before any
 `LF`. A violation of this rule is also a **E123** error.
 
-If the document contains no `LF` characters outside literal atom payloads, no mode is established
-and no E123 errors can arise.
+If the document contains no `LF` characters outside literal atom payloads, the mode defaults to
+**LF mode** and no E123 errors can arise.
 
 No Unicode normalization is required or implied. CODL is defined over the exact Unicode code points
 that appear in the serialized text.
@@ -112,6 +112,9 @@ Blank lines have no defined indent.
 
 A **word** is a maximal contiguous sequence of non-newline, non-separator characters on a line,
 where separators are determined by the word-separation rules (§10.3).
+
+The **first content character** of a non-blank line is the first character after the margin and any
+indentation spaces — equivalently, the first non-space character on the line.
 
 An **ordinary line** is any non-blank line that is not a comment line (§11.1), a tabulation line
 (§11.2), or a line forming part of a source atom (§15) or literal atom (§16) payload.
@@ -190,7 +193,12 @@ parsed using the ordinary CODL line rules (**E102**).
 If present, the entire pragma line MUST be fully contained within the first 4096 bytes of the
 document (**E103**).
 
-The keyword of the pragma line MUST be `pragma`.
+The keyword of the pragma line MUST be `pragma`. The keyword `pragma` is reserved: it MUST NOT
+appear as a `Product.keyword` or `Variant.keyword` in any `Struct` within a schema (**E211**).
+
+The pragma line MUST contain at most three atoms after the keyword (version, schema identifier, and
+sigil). Any additional atoms are invalid (**E125**). The remark rule (§11.3) does not apply to the
+pragma line; any content that would otherwise be parsed as a remark is invalid (**E125**).
 
 The positional form of the pragma is:
 
@@ -209,12 +217,13 @@ The version parameter MUST have the form `x.y`, where `x` and `y` are non-negati
 
 The following rules govern how the version number changes across revisions of this specification:
 
-- A revision that accepts documents which would not be accepted by the previous revision MUST
+- A revision that rejects a document that would have been accepted by the previous revision MUST
   increment the major version.
 - A revision that accepts a previously accepted document but assigns it a different interpretation
   in its presentation or semantic model MUST increment the major version.
-- A revision that rejects a document that would have been accepted by an earlier revision MUST keep
-  the same major version and increment the minor version.
+- A revision that accepts documents which would not have been accepted by an earlier revision, but
+  does not reject or reinterpret any previously valid document, MUST keep the same major version and
+  increment the minor version.
 
 The schema identifier parameter is optional.
 
@@ -235,9 +244,16 @@ The schema identifier, if present, MUST be one of:
   is the BASE64-URL-encoded (no padding) SHA-256 hash of the BCODL representation of the schema
 - a bare BASE64-URL-encoded (no padding) SHA-256 hash of the BCODL representation of the schema
 
+A schema identifier that does not match either of these forms is invalid (**E124**).
+
 The `#` used in the URL form is the standard URI fragment separator (RFC 3986 §3.5). A bare hash is
 distinguished from a URL by the absence of a `://` substring. Because the BASE64-URL alphabet
 contains no space characters, a schema identifier always occupies a single word.
+
+A **schema signature** is a deterministic byte string derived from the SHA-256 hashes of the
+schema's components (base schema and any layers). It uniquely identifies a composed schema and
+enables verification of schema identity and compatibility. The full construction and decoding
+algorithm for schema signatures is defined in §20.4.5.
 
 The BCODL format and the schema hash derivation are defined in §20.4.
 
@@ -258,6 +274,11 @@ The following table defines the outcome for each combination:
 | present           | present, matching     | Same as invocation-only; types are statically known          |
 | present           | present, compatible   | Parsed with invocation schema; types are statically known    |
 | present           | present, incompatible | Error                                                        |
+
+Types are **statically known** when the schema is available at compile time (or equivalent) in the
+host language, enabling type-safe access through generated types, type providers, or similar
+mechanisms. When types are not statically known, the semantic model is still available but must be
+accessed through a dynamic or generic interface.
 
 Two schema identifiers **match** if:
 
@@ -299,10 +320,13 @@ The pragma line is not included in the `Document.children` sequence. It is recor
 
 A CODL document MAY begin with zero or more blank lines.
 
-A document containing no non-blank lines is invalid (**E107**).
+A document containing no non-blank lines (other than an interpreter directive or pragma) is valid
+and has an empty `children` list.
 
-If the document begins with an interpreter directive, the **margin** is zero. Otherwise, the
-**margin** is the sequence of leading spaces on the first non-blank line.
+If the document begins with an interpreter directive, the **margin** is zero. Otherwise, if the
+document contains at least one non-blank content line, the **margin** is the sequence of leading
+spaces on the first such line. If the document contains no non-blank content lines, the margin is
+zero.
 
 Every non-blank line in the document MUST begin with the margin, optionally followed by
 additional spaces. A non-blank line which does not begin with the margin is invalid (**E108**).
@@ -528,6 +552,7 @@ interface Source {
 }
 
 interface Literal {
+  delimiter: string;
   text: string;
 }
 ```
@@ -554,7 +579,9 @@ A block whose `compounds` list is empty and whose `comments` list is non-empty r
 free-standing comment group (a comment or comments not immediately followed by any compound at the
 same level). Such a block has no tabulation.
 
-Each `Atom.Inline` records the number of spaces immediately preceding it on its source line.
+Each `Atom.Inline` records the number of spaces immediately preceding it on its source line. Each
+`Atom.Literal` records the delimiter string used to open and close it, in addition to the payload
+text.
 
 ## 13. Compound Tree Structure
 
@@ -706,8 +733,9 @@ Every non-blank, non-comment row MUST be an ordinary compound line. Every row MU
 indent as the tabulation line (**E118**). Rows MUST NOT have child line-nodes (**E114**).
 
 **Row structure.** Each row consists of a keyword and zero or more **pre-column atoms**, followed by
-zero or more **column values**. The keyword and pre-column atoms are separated from each other by
-single spaces. Column values are introduced by the column positions defined by the tabulation line.
+zero or more **column values**. The keyword and pre-column atoms are parsed using the same
+word-separation rules as ordinary lines (§10.3). Column values are introduced by the column
+positions defined by the tabulation line.
 
 **Spacing constraints.** The following two rules govern the spacing on every row:
 
@@ -731,6 +759,12 @@ A present column has an **empty value** if position M_i is itself a space charac
 at position M_i − 1. An empty value requires that the subsequent column (if any) is also present,
 since otherwise the separator spaces at M_i − 2 and M_i − 1 would be trailing spaces, which are not
 permitted. A row MUST NOT have trailing spaces (**E110**).
+
+**Omitted column semantics.** When a schema is available, an absent column is interpreted according
+to the schema member that corresponds to that column's position: if the member has a `Primitive`
+type with a non-null `default`, the default value is used; if the member is not `required`, the
+member is treated as absent (unfilled); if the member is `required` and has no default, the document
+is invalid (**E307**).
 
 **Width constraint.** For each present non-final column i, its value MUST NOT exceed M\_{i+1} − M_i
 − 2 code points in width (**E121**). The final column is unbounded.
@@ -771,9 +805,18 @@ model. Specifically, the serialized output MUST preserve:
 - for each `Inline` atom, the `precedingSpaces` count
 - document-level fields: interpreter directive, pragma, and children order
 
-A serializer MAY normalize blank line content to empty lines (rather than space-only lines), and MAY
-use a minimum hard space (exactly two spaces) before remark introducers, since neither is recorded
-in the presentation model. All other presentation-model details MUST be reproduced exactly.
+A serializer MAY apply the following normalizations, since the affected details are not recorded in
+the presentation model:
+
+- Blank line content MAY be normalized to empty lines (rather than space-only lines).
+- A minimum hard space (exactly two spaces) MAY be used before remark introducers.
+- Multiple consecutive trailing blank lines at the end of a block MAY be collapsed to the recorded
+  `trailingBlankLines` count.
+
+All other presentation-model details MUST be reproduced exactly. In particular, the round-trip
+guarantee preserves: all compounds with their keywords, atoms, remarks, and children; all block
+structure including comments, tabulations, and ordering; atom presentation form and
+`precedingSpaces`; and the `Literal.delimiter` string.
 
 ### 18.2 Semantic Model
 
@@ -784,11 +827,13 @@ The semantic model is derived from the presentation model by applying the type a
 type Element = Node | Value;
 
 interface Node {
+  keywordIndex: number;
   type: Type;
   children: Element[];
 }
 
 interface Value {
+  keywordIndex: number;
   type: Primitive;
   text: string;
 }
@@ -801,8 +846,10 @@ the type assignment algorithm (§20.2). `Node.children` is the ordered list of c
 A `Value` represents a `Primitive`-typed element. It is a leaf: it carries the atom text in
 `Value.text` and has no children.
 
-The keyword that identified each node is not stored in the semantic model; it can be recovered from
-the node's type and the parent's schema structure.
+Every element carries a `keywordIndex`, which is the position of the element's keyword in the
+keyword order (§20) of the parent's `Struct` type. For the document root, `keywordIndex` is not
+applicable. The `keywordIndex` identifies which member (and, for `Sum` members, which variant) the
+element fills, and is sufficient to recover the keyword string from the schema.
 
 The interpreter directive, pragma, comments, tabulations, and remarks are not part of the semantic
 model. There is a one-to-one mapping between presentation-layer atoms and compounds on the one
@@ -884,9 +931,9 @@ same compound line must be assigned to that same repeatable child type. Conseque
 `Primitive` member may only consume atoms if it is the last atom-assignable member in member order;
 no further atoms may be assigned to subsequent members.
 
-Similarly, once atoms are assigned to a `Sum` member (whose variants are all `Flag`), no further
-atoms may be assigned to subsequent members, because each atom is matched against the Sum's variant
-keywords and the atom phase cannot advance past a `Sum` member except by skipping it entirely.
+Similarly, once atoms are assigned to an all-`Flag` `Sum` member, no further atoms may be assigned
+to subsequent members, because each atom is matched against the Sum's variant keywords and the atom
+phase cannot advance past a `Sum` member except by skipping it entirely.
 
 For a `repeatable` member, occurrences may be split across both of the following:
 
@@ -922,11 +969,10 @@ specified in the tables below.
 | E104 | §8       | Pragma version parameter does not have the form `x.y` with non-negative integers                   | The version atom                                                                                            |
 | E105 | §8       | Pragma sigil present without a schema identifier                                                   | The sigil atom                                                                                              |
 | E106 | §8       | Pragma sigil is a space, newline, letter, or digit                                                 | The sigil atom                                                                                              |
-| E107 | §9       | Document contains no non-blank lines                                                               | Zero-width span at the start of the document (`[0, 0)`)                                                     |
 | E108 | §9       | Non-blank line begins with fewer than the margin number of spaces                                  | The leading spaces of the line (zero-width at line start if no spaces)                                      |
 | E109 | §9       | Relative indentation after the margin is odd                                                       | The leading spaces of the line; extended through subsequent lines if margin adjustment persists (see §19.5) |
 | E110 | §9, §17  | Trailing spaces on a non-blank ordinary line or tabulated row                                      | The trailing space characters                                                                               |
-| E111 | §11.1    | Comment line not immediately preceded by a blank line                                              | Zero-width span at the start of the comment line                                                            |
+| E111 | §11.1    | Comment line not preceded by a blank line, another comment, start of document, or lesser-indented line | Zero-width span at the start of the comment line                                                        |
 | E112 | §14      | Line indent is less than the preceding non-blank line's indent and no ancestor has the same indent | The leading spaces of the line                                                                              |
 | E113 | §14      | Line indent exceeds the preceding non-blank line's indent by more than one                         | The leading spaces of the line                                                                              |
 | E114 | §14, §17 | Line would become a child of a comment, tabulation, or tabulated row                               | Zero-width span at the start of the line                                                                    |
@@ -939,6 +985,8 @@ specified in the tables below.
 | E121 | §17      | Column value exceeds the maximum width for that column                                             | The overflowing column value                                                                                |
 | E122 | §11.2    | Malformed tabulation line heading                                                                  | The malformed heading region (from the marker to the next marker or end of line)                            |
 | E123 | §4       | `CR` not immediately followed by `LF`, or line-ending mode inconsistency                           | The `CR` character (or `CR LF` pair that violates the established mode)                                     |
+| E124 | §8.1     | Schema identifier is not a valid URL or bare BASE64-URL hash                                       | The schema identifier atom                                                                                  |
+| E125 | §8       | Pragma line has extra atoms beyond the expected parameters, or contains a remark                    | The first extra atom, or the remark introducer                                                              |
 
 #### Schema Errors (E2xx)
 
@@ -947,13 +995,13 @@ specified in the tables below.
 | E201 | §20.1   | `Schema.document` is not a `Struct`                                                                                       | The `document` field in the schema             |
 | E202 | §20.1   | Duplicate keyword within a `Struct` (across `Product` keywords and `Sum` variant keywords)                                | The second occurrence of the duplicate keyword |
 | E203 | §20.1   | `Sum` member has an empty `variants` list                                                                                 | The `Sum` member definition                    |
-| E204 | §20.1   | `Sum` member has a variant whose type is not `Flag`                                                                       | The non-`Flag` variant                         |
 | E205 | §20.2   | Root struct has a `required` atom-assignable member (unreachable: the document root has no atoms)                         | The `required` member definition               |
 | E206 | §20.1   | `Primitive` has a non-null `default` but appears in a non-`required` member                                               | The `default` field of the `Primitive`         |
 | E207 | §20.3   | Two or more `Layer`s within a `Schema` share the same `id`                                                                | The second `Layer` with the duplicate `id`     |
 | E208 | §20.3   | A `Layer` `Sum` member has a variant keyword that overlaps with an existing keyword in the base `Struct`                  | The overlapping variant keyword in the layer   |
 | E209 | §20.3   | A `Layer` `Product` member matches an existing keyword but the base or layer member is not a `Product` with `Struct` type | The layer member definition                    |
 | E210 | §20     | `Schema.sigil` is non-null and is a space, newline, letter, or digit                                                      | The `sigil` field value                        |
+| E211 | §8, §20.1 | The keyword `pragma` appears as a `Product.keyword` or `Variant.keyword` in any `Struct`                                | The keyword definition containing `pragma`     |
 
 #### Validation Errors (E3xx)
 
@@ -968,7 +1016,7 @@ specified in the tables below.
 | E307 | §20.2   | Required member absent, and member is not a `Product` with a `Primitive` type with non-null `default` | Zero-width span at the end of the parent compound's last child (or at the parent keyword if no children) |
 | E308 | §20.2   | Non-repeatable member is filled more than once                                                        | The keyword of the second occurrence                                                                     |
 | E309 | §20.2   | Compound children of the same member are not contiguous                                               | The keyword of the non-contiguous child (the second group's first child)                                 |
-| E310 | §21     | Helper method returned an invalid response for a `Primitive` atom value                               | As reported by the helper method's diagnostic spans, translated to document offsets                      |
+| E310 | §21     | Primitive value failed validation by the named helper method                                          | As reported by the helper method's diagnostic spans, translated to document offsets                      |
 | E311 | §20.2   | `Flag`-typed compound has atoms or compound children                                                  | The first atom or child of the `Flag` compound                                                           |
 
 ### 19.4 Error Diagnosis
@@ -1005,11 +1053,10 @@ before continuing. No error SHALL prevent subsequent errors from being reported.
 | E104 | If the version parameter cannot be parsed as `x.y` at all, ignore it and parse with the latest known version. If it has the correct format but names an unknown version, use the most recent minor version of the same major version if one is known; if the major version itself is unknown, use the latest known version overall. |
 | E105 | Treat the sigil as valid even though no schema identifier is present.                                                                                                                                                                                                                                                               |
 | E106 | Ignore the invalid sigil and use the default sigil (`#`) instead.                                                                                                                                                                                                                                                                   |
-| E107 | Terminal. No recovery is possible or necessary; parsing cannot continue on an empty document.                                                                                                                                                                                                                                       |
 | E108 | If the line has exactly one fewer leading space than the current margin, insert a synthetic leading space and parse the line at the current indentation level normally. If the line has two or more fewer leading spaces than the current margin, reset the margin to the line's actual indentation level from that point forward.  |
 | E109 | Parse the line's keyword; check which of the two candidate indent levels (±1 space) makes the keyword valid according to the schema; adjust the margin accordingly. See indentation recovery algorithm below.                                                                                                                       |
 | E110 | Ignore trailing spaces and parse the remainder of the line normally.                                                                                                                                                                                                                                                                |
-| E111 | Ignore the absence of a preceding blank line and treat the comment as normally attached to the following node.                                                                                                                                                                                                                      |
+| E111 | Ignore the missing preceding blank line (or other required predecessor) and treat the comment as normally attached to the following node.                                                                                                                                                                                           |
 | E112 | Same indentation recovery as E109: use the schema to determine which candidate indent level produces a valid keyword placement, and adjust the margin accordingly.                                                                                                                                                                  |
 | E113 | Same indentation recovery as E109: use the schema to determine which candidate indent level produces a valid keyword placement, and adjust the margin accordingly.                                                                                                                                                                  |
 | E114 | Same indentation recovery as E109: the line cannot be a child of its apparent parent (a comment, tabulation, or row), so treat it as if indented one level less and use the schema to validate the adjusted placement.                                                                                                              |
@@ -1022,6 +1069,8 @@ before continuing. No error SHALL prevent subsequent errors from being reported.
 | E121 | Same as E118.                                                                                                                                                                                                                                                                                                                       |
 | E122 | Report the error and continue parsing, but disable column-alignment checking for the remainder of the current tabulated block.                                                                                                                                                                                                      |
 | E123 | Treat any malformed sequence of consecutive `CR` and `LF` characters as a single line break if it contains at most one `CR` and at most one `LF`; treat it as two line breaks if either `CR` or `LF` appears more than once in the sequence.                                                                                        |
+| E124 | Ignore the invalid schema identifier and continue parsing as if no schema identifier were specified. The document is treated as untyped.                                                                                                                                                                                            |
+| E125 | Ignore the extra atoms and any remark on the pragma line. Parse the pragma using only the first three atoms (version, schema identifier, sigil).                                                                                                                                                                                    |
 
 #### Validation Error Recovery
 
@@ -1149,7 +1198,13 @@ A `Sum` member has a non-empty list of `Variant`s. Any variant's keyword may be 
 slot; the chosen keyword determines the type of the child node placed in that slot.
 
 `Variant.keyword` is the keyword by which a child compound of that variant is written in CODL when
-explicit. `Variant.type` may be any `Type`.
+explicit. `Variant.type` may be any `Type`. A `Sum` value looks and behaves exactly like one of its
+variants: if the chosen variant has `Struct` type, the compound child has that struct's members as
+children; if the variant has `Primitive` type, the compound child carries a value; if the variant
+has `Flag` type, the compound child is a bare keyword with no content.
+
+A `Sum` member is **atom-assignable** if and only if all of its variants have `Flag` type. A `Sum`
+with any non-`Flag` variant may only be filled by compound children with explicit keywords.
 
 A `Primitive` type represents a leaf value constrained by a validator. `Primitive.validator` names
 the helper method to be invoked to validate the atom text (§21). `Primitive.default` is either
@@ -1172,11 +1227,10 @@ inline atoms, schema authors SHOULD order members as follows:
 1. Required `Product` members with `Primitive` type (most likely to always be present).
 2. Non-required `Product` members with `Primitive` type, prioritizing those most likely to be
    specified rather than absent.
-3. Either a `Sum` member (all `Flag` variants) or a single `repeatable` `Product` member with
-   `Primitive` type — but not both, since only one of these can appear in the trailing atom
-   position.
-4. All remaining members (`Struct`-typed products, sums not covered above, and any further members),
-   which will always be serialized as compound children.
+3. Either an all-`Flag` `Sum` member or a single `repeatable` `Product` member with `Primitive`
+   type — but not both, since only one of these can appear in the trailing atom position.
+4. All remaining members (`Struct`-typed products, mixed-variant `Sum` members, and any further
+   members), which will always be serialized as compound children.
 
 This ordering is a recommendation, not a requirement. Any member order is valid.
 
@@ -1216,9 +1270,12 @@ A schema is invalid if any of the following holds:
 - within a single `Struct`, the same keyword appears more than once across all members (considering
   `Product.keyword` and every `Variant.keyword` within each `Sum`) (**E202**)
 - a `Sum` member has an empty `variants` list (**E203**)
-- a `Sum` member has a variant whose type is not `Flag` (**E204**)
-- a `Primitive` has a non-null `default` and appears in a `Member` with `required: false` (**E206**)
+- a `Primitive` has a non-null `default` and appears in a `Member` with `required: false`
+  (**E206**). Absence of a non-required member always means the member is absent; defaults are only
+  meaningful for required members that may be elided in the source document.
 - `Schema.sigil` is non-null and is a space, newline, letter, or digit (**E210**)
+- the keyword `pragma` appears as a `Product.keyword` or `Variant.keyword` in any `Struct`
+  (**E211**)
 
 ### 20.2 Type Assignment Algorithm
 
@@ -1227,9 +1284,9 @@ every atom and compound node in the tree. It proceeds as a recursive descent ove
 by the schema.
 
 **Atom-assignable members.** A `Product` member M is _atom-assignable_ if M.type is `Primitive` or
-`Flag`. A `Sum` member is always atom-assignable (schema validity E204 ensures all its variants are
-`Flag`). A member that is not atom-assignable may only be satisfied by compound children (written
-with an explicit keyword), not by inline atoms.
+`Flag`. A `Sum` member is atom-assignable if and only if all of its variants have `Flag` type. A
+member that is not atom-assignable may only be satisfied by compound children (written with an
+explicit keyword), not by inline atoms.
 
 **Document root.** The document root is a virtual compound node with type `Schema.document`. It has
 no atoms; any `required` atom-assignable members of the root struct cannot be satisfied (**E205**).
@@ -1245,9 +1302,10 @@ no atoms; any `required` atom-assignable members of the root struct cannot be sa
 3. **Atom phase.** Let `pos` = 0. For each atom A in N.atoms, in order:
 
    a. Advance `pos` while the following skip condition holds: `pos` < len(T.members), the member M
-   at `pos` is not `required`, M is a `Sum` or M is a `Product` with `Flag` type, and the text of A
-   does not match any keyword of M (i.e., M.keyword for a `Product`, or any variant's keyword for a
-   `Sum`). Each advanced-past member is recorded as absent.
+   at `pos` is not `required`, and one of: (1) M is not atom-assignable, or (2) M is atom-assignable
+   and is an all-`Flag` `Sum` or a `Product` with `Flag` type, and the text of A does not match any
+   keyword of M (i.e., M.keyword for a `Product`, or any variant's keyword for a `Sum`). Each
+   advanced-past member is recorded as absent.
 
    b. If `pos` ≥ len(T.members), the document is invalid (**E302**: more atoms than assignable
    member positions).
@@ -1619,14 +1677,29 @@ by iterating the struct's members in member order:
 
 1. Starting from the first member, each non-repeatable `Product` member whose type is `Primitive` is
    serialized as an inline atom, in member order, for as long as consecutive members satisfy this
-   condition.
-2. If the next member after the initial run of non-repeatable primitives is a `Sum`, each present
-   flag is serialized as an inline atom.
+   condition and the value can be represented as an inline atom (see atom form escalation below).
+2. If the next member after the initial run of non-repeatable primitives is an all-`Flag` `Sum`,
+   each present flag is serialized as an inline atom.
 3. Otherwise, if the next member is a `repeatable` `Product` whose type is `Primitive`, each
-   occurrence is serialized as an inline atom.
-4. All remaining children — including any `Product` members whose type is `Struct`, any `Sum`
-   members not covered by step 2, and any members beyond the first repeatable primitive — are
-   serialized as compound children with explicit keywords.
+   occurrence is serialized as an inline atom (if representable; see atom form escalation below).
+4. All remaining children — including any `Product` members whose type is `Struct`, mixed-variant
+   `Sum` members, and any members beyond the first repeatable primitive — are serialized as compound
+   children with explicit keywords.
+
+**Atom form escalation.** When serializing a `Primitive` value, the atom form is selected as
+follows:
+
+1. **Inline atom**: used if the value contains no `LF` characters and can be represented on the
+   parent line without violating the word-separation rules (§10.3) — that is, the value does not
+   contain hard spaces when in soft-space mode.
+2. **Source atom**: used if the value cannot be an inline atom but does not contain trailing spaces
+   on any line and does not require exact byte-level preservation.
+3. **Literal atom**: used if the value cannot be represented as a source atom — for example, if
+   it contains trailing spaces on a line, or if the source-atom stripping rules would alter the
+   content.
+
+If a value requires source or literal atom form, it is serialized as a compound child with an
+explicit keyword and the appropriate atom body, rather than as an inline atom.
 
 Each inline atom uses a single preceding space (`precedingSpaces = 1`). Each compound child is
 indented by one level (two spaces) relative to its parent.
@@ -1700,11 +1773,13 @@ representation. Canonical serialization follows the same conventions as the `con
 - No blank lines appear between children at any level.
 - The root node has no inline atoms (the document root is a virtual struct with no atom positions),
   so every root-level member is serialized as a compound child.
-- At every non-root level, inline atoms are used wherever possible, following the `construct`
-  conventions: non-repeatable primitives first, then flags or one repeatable primitive, then
-  compound children for everything else.
+- At every non-root level, the atom form escalation rules from the `construct` operation apply:
+  inline atoms are preferred, falling back to source atoms for values containing newlines, and to
+  literal atoms as a last resort for values that source atom form cannot faithfully represent.
 - Each inline atom uses a single preceding space (`precedingSpaces = 1`).
 - Each compound child is indented by one level (two spaces) relative to its parent.
+- Literal atoms use the delimiter `---` unless the payload contains that string as a line, in which
+  case a unique delimiter is chosen.
 - Line endings use LF mode.
 
 Two documents with identical semantic models, serialized canonically by the same version of the
@@ -1721,17 +1796,12 @@ taxonomy of all error conditions, their trigger sections, and their recovery str
 
 The following topics remain underspecified or unresolved:
 
-- **Complete error taxonomy.** Error codes E101–E123 (parsing), E201–E210 (schema), and E301–E311
+- **Complete error taxonomy.** Error codes E101–E125 (parsing), E201–E211 (schema), and E301–E311
   (validation) are believed to be complete. A malformed schema _document_ (as opposed to a
   malformed schema _definition_) is not a separate error category: since schemas are CODL documents
   typed by the `codl-schema` schema, errors in a schema document are ordinary parsing and
   validation errors reported against that schema. No additional error codes are believed to be
   needed, but this has not been exhaustively verified.
-
-- **Canonical serialization.** Canonical document serialization is defined in §22.3. No further
-  specification is believed to be needed, but the interaction between canonical serialization and
-  source/literal atom forms has not been fully explored (canonical form currently always uses inline
-  atoms).
 
 - **Mutation semantics.** The computer editor operations (§22.2) are defined individually. What is
   missing: the semantics of composing multiple operations (ordering, atomicity, conflict

@@ -1,0 +1,4 @@
+#!/usr/bin/env codl
+
+pragma 1.0
+hello
