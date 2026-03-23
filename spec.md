@@ -229,8 +229,6 @@ The schema identifier parameter is optional.
 
 The sigil parameter is optional.
 
-If the sigil parameter is present, the schema identifier parameter MUST also be present (**E105**).
-
 The sigil MUST be a single ASCII symbolic character. It MUST NOT be SPACE, LINEFEED, CARRIAGE
 RETURN, a letter, a control character or a digit (**E106**).
 
@@ -967,7 +965,6 @@ specified in the tables below.
 | E102 | §8       | Pragma is not the first non-blank line after any interpreter directive                             | The `pragma` keyword on the misplaced line                                                                  |
 | E103 | §8       | Pragma line extends beyond the first 4096 bytes                                                    | The entire pragma line                                                                                      |
 | E104 | §8       | Pragma version parameter does not have the form `x.y` with non-negative integers                   | The version atom                                                                                            |
-| E105 | §8       | Pragma sigil present without a schema identifier                                                   | The sigil atom                                                                                              |
 | E106 | §8       | Pragma sigil is a space, newline, letter, or digit                                                 | The sigil atom                                                                                              |
 | E108 | §9       | Non-blank line begins with fewer than the margin number of spaces                                  | The leading spaces of the line (zero-width at line start if no spaces)                                      |
 | E109 | §9       | Relative indentation after the margin is odd                                                       | The leading spaces of the line; extended through subsequent lines if margin adjustment persists (see §19.5) |
@@ -1051,7 +1048,6 @@ before continuing. No error SHALL prevent subsequent errors from being reported.
 | E102 | Restart parsing the entire document using the version, schema identifier, and sigil extracted from the misplaced pragma.                                                                                                                                                                                                            |
 | E103 | Allow the pragma line to exceed the 4096-byte limit and continue parsing its content normally.                                                                                                                                                                                                                                      |
 | E104 | If the version parameter cannot be parsed as `x.y` at all, ignore it and parse with the latest known version. If it has the correct format but names an unknown version, use the most recent minor version of the same major version if one is known; if the major version itself is unknown, use the latest known version overall. |
-| E105 | Treat the sigil as valid even though no schema identifier is present.                                                                                                                                                                                                                                                               |
 | E106 | Ignore the invalid sigil and use the default sigil (`#`) instead.                                                                                                                                                                                                                                                                   |
 | E108 | If the line has exactly one fewer leading space than the current margin, insert a synthetic leading space and parse the line at the current indentation level normally. If the line has two or more fewer leading spaces than the current margin, reset the margin to the line's actual indentation level from that point forward.  |
 | E109 | Parse the line's keyword; check which of the two candidate indent levels (±1 space) makes the keyword valid according to the schema; adjust the margin accordingly. See indentation recovery algorithm below.                                                                                                                       |
