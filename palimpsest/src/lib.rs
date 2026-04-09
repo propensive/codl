@@ -1,4 +1,5 @@
-pub type Hash = [u8; 32];
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct Hash([u8; 32]);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Palimpsest(Vec<u8>);
@@ -21,51 +22,44 @@ impl Palimpsest {
         self.0.clone()
     }
 }
-pub fn encode(hashes: Vec<&Hash>) -> Palimpsest {
+
+pub fn encode(hashes: Vec<Hash>) -> Palimpsest {
     let length = hashes.len() + 30;
     let mut bytes = vec![0u8; length];
     for hash in 0..hashes.len() {
         for index in 0..32 {
-            bytes[hash + index] ^= hashes[hash][index];
+            bytes[hash + index] ^= hashes[hash].0[index];
         }
     }
     Palimpsest(bytes)
 }
 
-pub fn decode(palimpsest: Palimpsest, bibliography: Bibliography) -> Vec<Hash> {
-    let count = palimpsest.bytes().len() - 30;
-    let mut array = palimpsest.bytes();
-
-    fn xor(mut data: Vec<u8>, offset: usize) {
+pub fn decode(palimpsest: Palimpsest, bibliography: Bibliography) -> Option<Vec<Hash>> {
+    fn xor(data: &mut Vec<u8>, hash: Hash, offset: usize) {
         for index in 0..data.len() {
-            data[index + offset] ^= data[index];
+            data[index + offset] ^= hash.0[index];
         }
     }
 
-    fn complete(data: Vec<u8>) -> bool {
-        data.iter().all(|&byte| byte == 0)
-    }
-
-    fn recur(item: usize, hashes: Vec<Hash>) -> Option<Vec<Hash>> {
-        if item == length {
-            if complete(&hashes) {
-                Some(hashes)
+    fn recur(bibliography: &Bibliography, data: &mut Vec<u8>, count: usize, item: usize, hashes: &mut Vec<Hash>) -> Option<Vec<Hash>> {
+        if item == count {
+            if data.iter().all(|&byte| byte == 0) {
+                Some(hashes.clone())
             } else {
                 None
             }
         } else {
-            bibliography.lookup(array(item)).for_each(|hash| {
-                xor(hash, item as usize);
-                match recur(item + 1, hashes.push(hash)) {
-                    Some(result) => Some(result)
-                    None =>
-                      xor(hash, item as usize);
-                      continue
-                }
-
-            });
+            bibliography.lookup(data[item]).iter().find_map(|&hash| {
+                xor(data, hash, item);
+                let result = recur(bibliography, data, count, item + 1, hashes);
+                xor(data, hash, item);
+                result
+            })
         }
     }
 
-    recur(0, Vec::new())
+    let mut data = palimpsest.bytes();
+    let mut hashes: Vec<Hash> = Vec::new();
+    let count = palimpsest.bytes().len() - 30;
+    recur(&bibliography, &mut data, count, 0, &mut hashes)
 }
