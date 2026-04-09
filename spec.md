@@ -1,17 +1,18 @@
-# CODL Specification Draft
+# TEL Specification Draft
 
 ## Abstract
 
-CODL is a line-oriented, tree-structured data language designed for data that is read, written and
-maintained by both humans and machines.
+TEL is a line-oriented, tree-structured, typed data language designed for data that is read, written
+and maintained by both humans and machines.
 
-CODL defines a **presentation model** that preserves comments, document structure and user data
+TEL defines a **presentation model** that preserves comments, document structure and user data
 through programmatic round-trips, while permitting minor normalizations such as collapsing
 space-only blank lines to empty lines. A schema-driven **semantic model** ascribes types to every
-node in the tree. The two models are connected by a deterministic type-assignment algorithm, and a
-compact binary encoding (BCODL) provides an unambiguous serialization of the semantic model.
+node in the tree. The two models are connected by a deterministic type-assignment algorithm. A
+companion specification, [BinTEL](bintel-spec.md), defines a compact binary encoding that provides
+an unambiguous serialization of the semantic model.
 
-The design of CODL is motivated by the following goals:
+The design of TEL is motivated by the following goals:
 
 - **Formatting preservation.** Machine edits should not disturb formatting, comments or whitespace
   on lines they do not semantically change, so that line-based version control produces minimal,
@@ -29,7 +30,7 @@ The design of CODL is motivated by the following goals:
 
 ## 1. Status
 
-This document is a draft specification of CODL.
+This document is a draft specification of TEL.
 
 Where this draft contains `FIXME` notes, the corresponding behavior is not yet fully specified and
 MUST NOT be considered stable.
@@ -42,32 +43,32 @@ described in RFC 2119 and RFC 8174 when, and only when, they appear in all capit
 
 ## 3. Overview
 
-CODL is a Unicode, character-based language for ordered, tree-structured data represented as
-strings, and typed according to a schema.
+TEL is a Unicode, character-based language for ordered, tree-structured data represented as strings,
+and typed according to a schema.
 
-CODL presents data as an _ordered_ tree, however an application consuming CODL MAY choose to assign
-meaning to sibling order, or MAY treat it as insignificant. In this respect, CODL is similar to XML.
+TEL presents data as an _ordered_ tree, however an application consuming TEL MAY choose to assign
+meaning to sibling order, or MAY treat it as insignificant. In this respect, TEL is similar to XML.
 
-CODL distinguishes between:
+TEL distinguishes between:
 
 - a **presentation model**, which preserves comments, interpreter directives, pragma metadata, atom
   presentation form, most whitespace and document structure sufficiently for faithful
   reserialization, and
 - a **semantic model**, which is derived from the presentation model using a schema.
 
-This document specifies CODL source, its parsing into the presentation model, the definition of
+This document specifies TEL source, its parsing into the presentation model, the definition of
 schemas and translation between presentation model and semantic model by means of a schema.
 
 ## 4. Character Encoding
 
-CODL is defined over Unicode code points.
+TEL is defined over Unicode code points.
 
-When serialized as binary data, a CODL document MUST be encoded as UTF-8.
+When serialized as binary data, a TEL document MUST be encoded as UTF-8.
 
-CODL uses `U+000A` LINE FEED (`LF`) as its primary line-ending character. Carriage return (`CR`,
+TEL uses `U+000A` LINE FEED (`LF`) as its primary line-ending character. Carriage return (`CR`,
 `U+000D`) is also permitted under the following rules.
 
-A `CR` appearing anywhere in a CODL document outside a literal atom payload MUST be immediately
+A `CR` appearing anywhere in a TEL document outside a literal atom payload MUST be immediately
 followed by `LF` (**E123**).
 
 The **line-ending mode** of a document is determined by the first `LF` character in the document:
@@ -77,30 +78,28 @@ The **line-ending mode** of a document is determined by the first `LF` character
 
 Once the mode is established, every subsequent `LF` outside a literal atom payload MUST conform to
 it: in CRLF mode every `LF` MUST be preceded by `CR`; in LF mode `CR` MUST NOT appear before any
-`LF`. A violation of this rule is also a **E123** error.
+`LF`. A violation of this rule is also an **E123** error.
 
-If the document contains no `LF` characters outside literal atom payloads, the mode defaults to
-**LF mode** and no E123 errors can arise.
-
-No Unicode normalization is required or implied. CODL is defined over the exact Unicode code points
+No Unicode normalization is required or implied. TEL is defined over the exact Unicode code points
 that appear in the serialized text.
 
-A UTF-8 byte order mark MUST NOT appear in a CODL document (**E101**).
+A UTF-8 byte order mark MUST NOT appear in a TEL document (**E101**).
 
 Visually misleading code points, such as zero-width characters, SHOULD be avoided. Control-heavy
-content SHOULD be avoided except where required. CODL is not intended primarily as a binary-data
+content SHOULD be avoided except where required. TEL is not intended primarily as a binary-data
 format, even though it can represent content containing non-printing code points.
 
 ## 5. Significant Characters and Terms
 
-The following characters have syntactic significance in CODL:
+The following characters have syntactic significance in TEL:
 
 - `U+000A` LINE FEED (`LF`)
 - `U+0020` SPACE
-- the sigil (§8.3)
+- one other symbolic character designated as the **sigil** (§8.3)
 
 A **line** is a contiguous, potentially empty sequence of non-linefeed characters delimited by
-linefeed characters or by the start or end of the file.
+linefeed characters or by the start or end of the file. In CRLF mode (§4), the `CR` immediately
+preceding each delimiting `LF` is part of the line terminator and is not part of the line's content.
 
 A **soft space** is exactly one `U+0020` SPACE character.
 
@@ -110,7 +109,10 @@ A **blank line** is a line containing only `U+0020` SPACE characters, or no char
 
 Blank lines have no defined indent.
 
-A **word** is a maximal contiguous sequence of non-newline, non-separator characters on a line,
+A **parenthetical symbol** is one of the six bracket characters: `(`, `)`, `[`, `]`, `<`, `>`, `{`,
+`}`.
+
+A **word** is a maximal contiguous sequence of non-linefeed, non-separator characters on a line,
 where separators are determined by the word-separation rules (§10.3).
 
 The **first content character** of a non-blank line is the first character after the margin and any
@@ -121,11 +123,11 @@ An **ordinary line** is any non-blank line that is not a comment line (§11.1), 
 
 ## 6. Root Structure
 
-A parsed CODL document has the following root structure:
+A parsed TEL document has the following root structure:
 
 ```typescript
 interface Document {
-  interpreterDirective: string | null;
+  directive: string | null;
   pragma: Pragma | null;
   lineEndings: "LF" | "CRLF";
   children: Block[];
@@ -137,48 +139,16 @@ interface Pragma {
   sigil: Sigil | null;
 }
 
-type Sigil =
-  | "!"
-  | '"'
-  | "#"
-  | "$"
-  | "%"
-  | "&"
-  | "'"
-  | "("
-  | ")"
-  | "*"
-  | "+"
-  | ","
-  | "-"
-  | "."
-  | "/"
-  | ":"
-  | ";"
-  | "<"
-  | "="
-  | ">"
-  | "?"
-  | "@"
-  | "["
-  | "\\"
-  | "]"
-  | "^"
-  | "_"
-  | "`"
-  | "{"
-  | "|"
-  | "}"
-  | "~";
+type Sigil = "!" | '"' | "#" | "$" | "%" | "&" | "'" | "*" | "+" | "," | "-" | "." | "/" | ":" | ";" | "=" | "?" | "@" | "\\" | "^" | "_" | "`" | "|" | "~";
 ```
 
 ## 7. Interpreter Directive
 
-If the first two characters of the document are `#!`, then the first physical line of the document
-is an interpreter directive line. If not, the interpreter directive is absent.
+If the first two characters of the document are `#!` (`NUMBER SIGN`, `EXCLAMATION MARK`), then the first physical line of the document is an interpreter directive line.
+If not, the interpreter directive is absent.
 
 The interpreter directive payload is the content of the first line after the leading `#!`, up to but
-excluding the terminating newline.
+excluding the line terminator.
 
 If a document has an interpreter directive and also has a pragma, then the pragma MUST appear after
 the interpreter directive.
@@ -188,7 +158,7 @@ An interpreter directive line is not part of the `children` sequence.
 ## 8. Pragma
 
 If present, the pragma MUST be the first non-blank line after any interpreter directive line, and is
-parsed using the ordinary CODL line rules (**E102**).
+parsed using the ordinary TEL line rules (**E102**).
 
 If present, the entire pragma line MUST be fully contained within the first 4096 bytes of the
 document (**E103**).
@@ -208,7 +178,7 @@ pragma 1.0 schema-id #
 
 The parameters are interpreted in order as follows:
 
-1. CODL version
+1. TEL version
 2. schema identifier
 3. sigil
 
@@ -230,7 +200,7 @@ The schema identifier parameter is optional.
 The sigil parameter is optional.
 
 The sigil MUST be a single ASCII symbolic character. It MUST NOT be SPACE, LINEFEED, CARRIAGE
-RETURN, a letter, a control character or a digit (**E106**).
+RETURN, a letter, a control character, a digit, or a parenthetical symbol (§5) (**E106**).
 
 The default sigil is `#`, used unless the pragma or the document schema specifies a different one.
 
@@ -239,8 +209,10 @@ The default sigil is `#`, used unless the pragma or the document schema specifie
 The schema identifier, if present, MUST be one of:
 
 - an HTTP or HTTPS URL, optionally with a fragment (the `#` separator and everything after it) that
-  is the BASE64-URL-encoded (no padding) SHA-256 hash of the BCODL representation of the schema
-- a bare BASE64-URL-encoded (no padding) SHA-256 hash of the BCODL representation of the schema
+  is the BASE64-URL-encoded (no padding) SHA-256 hash of the [BinTEL](bintel-spec.md) representation
+  of the schema
+- a bare BASE64-URL-encoded (no padding) SHA-256 hash of the [BinTEL](bintel-spec.md) representation
+  of the schema
 
 A schema identifier that does not match either of these forms is invalid (**E124**).
 
@@ -251,13 +223,11 @@ contains no space characters, a schema identifier always occupies a single word.
 A **schema signature** is a deterministic byte string derived from the SHA-256 hashes of the
 schema's components (base schema and any layers). It uniquely identifies a composed schema and
 enables verification of schema identity and compatibility. The full construction and decoding
-algorithm for schema signatures is defined in §20.4.5.
-
-The BCODL format and the schema hash derivation are defined in §20.4.
+algorithm for schema signatures is defined in the [BinTEL Specification](bintel-spec.md).
 
 ### 8.2 Schema Resolution
 
-A schema may be supplied in two independent ways when parsing a CODL document:
+A schema may be supplied in two independent ways when parsing a TEL document:
 
 - an **invocation schema**, supplied directly to the parser by the calling application
 - a **document schema**, identified by the schema parameter in the pragma
@@ -316,7 +286,7 @@ The pragma line is not included in the `Document.children` sequence. It is recor
 
 ## 9. Lines, Margin, and Indentation
 
-A CODL document MAY begin with zero or more blank lines.
+A TEL document MAY begin with zero or more blank lines.
 
 A document containing no non-blank lines (other than an interpreter directive or pragma) is valid
 and has an empty `children` list.
@@ -326,8 +296,8 @@ document contains at least one non-blank content line, the **margin** is the seq
 spaces on the first such line. If the document contains no non-blank content lines, the margin is
 zero.
 
-Every non-blank line in the document MUST begin with the margin, optionally followed by
-additional spaces. A non-blank line which does not begin with the margin is invalid (**E108**).
+Every non-blank line in the document MUST begin with the margin, optionally followed by additional
+spaces. A non-blank line which does not begin with the margin is invalid (**E108**).
 
 For each non-blank line, the number of spaces following the margin MUST be even (**E109**). The
 **indent** is defined as one half of the number of spaces between the margin and the first non-space
@@ -358,7 +328,7 @@ readability.
 
 ### 10.2 Inline Atom Characters
 
-An inline atom may contain any Unicode code point other than newline, subject to the CODL
+An inline atom may contain any Unicode code point other than `LF`, subject to the TEL
 word-separation rules and any special parsing rules for remarks.
 
 ### 10.3 Word-Separation Rule
@@ -387,7 +357,7 @@ introducer; it must be preceded by a hard space to be recognized as one.
 
 ## 11. Comments, Tabulations, and Remarks
 
-CODL distinguishes between:
+TEL distinguishes between:
 
 - a **comment**, which occupies an entire line and is represented as a line-level presentation node,
 - a **tabulation**, which occupies an entire line and represents the start of a tabulated block, and
@@ -457,13 +427,13 @@ points. The final column (i = n) is unbounded.
 **Column headings.** Each marker M_i is followed by a **column heading**, parsed as follows:
 
 - If M_i is immediately followed by end of line, the heading is the empty string.
-- If M\_i is immediately followed by exactly one space (a soft space), the heading is the text
+- If M_i is immediately followed by exactly one space (a soft space), the heading is the text
   beginning after that space and ending immediately before the first hard space encountered, or at
   end of line if no hard space follows. If the heading ends at a hard space, the character
   immediately after that hard space MUST be the sigil (i.e., M\_{i+1}) (**E122**). The heading text
   MUST NOT itself contain the sigil (**E122**).
-- If M\_i is immediately followed by two or more spaces (a hard space), the character immediately
-  after those spaces MUST be the sigil (i.e., M\_{i+1}), and the heading for M\_i is the empty string
+- If M_i is immediately followed by two or more spaces (a hard space), the character immediately
+  after those spaces MUST be the sigil (i.e., M\_{i+1}), and the heading for M_i is the empty string
   (**E122** if not).
 - Any other character immediately following M_i (including a non-space character) is invalid
   (**E122**).
@@ -598,8 +568,8 @@ For each non-blank line after the first non-blank line, excluding lines consumed
 literal atoms, let the **previous compound line** be the most recent preceding non-blank compound
 line (i.e., excluding comment lines and tabulation lines):
 
-- if its indent is exactly one greater than that of the previous compound line, it is a child of
-  the previous compound line
+- if its indent is exactly one greater than that of the previous compound line, it is a child of the
+  previous compound line
 - if its indent is equal to that of the previous compound line, it is a peer of the previous
   compound line
 - if its indent is less than that of the previous compound line, it closes one or more open
@@ -641,13 +611,17 @@ from the start of the line. Any surplus leading spaces are preserved.
 For each captured line, trailing spaces are stripped. (Source-atom lines are not ordinary lines, so
 E110 does not apply to them; trailing spaces are silently removed rather than being an error.)
 
-A blank line within a source atom contributes exactly a newline character to the source-atom
-payload, regardless of how many spaces it physically contains.
+A blank line within a source atom contributes exactly a `LF` character to the source-atom payload,
+regardless of how many spaces it physically contains.
 
 The source-atom payload is otherwise captured literally. In particular, the sigil has no special
 meaning inside a source atom.
 
-The source-atom payload always ends with exactly one final newline character.
+The source-atom payload always ends with exactly one final `LF` character.
+
+Source-atom lines are subject to the normal line rules (§5): in CRLF mode, the `CR` preceding each
+`LF` is part of the line terminator and is not part of the line content. Consequently, source-atom
+payloads always use `LF` as the line separator, regardless of the document's line-ending mode.
 
 Source-atom lines are not compounds and are never members of a tabulated block. A source atom always
 terminates any surrounding tabulated block.
@@ -671,8 +645,8 @@ already has a source or literal atom is invalid (**E116**).
 
 The opening literal-atom line is not part of the payload.
 
-The remainder of that opening line, from its first content character up to but excluding its
-terminating newline, is the delimiter.
+The remainder of that opening line, from its first content character up to but excluding the line
+terminator, is the delimiter.
 
 The delimiter MUST consist only of ASCII characters other than whitespace (spaces, linefeeds,
 carriage returns, tabs, and other ASCII control characters).
@@ -682,9 +656,12 @@ If the delimiter is empty, the line does not begin a literal atom.
 The literal payload begins immediately after the `LF` that terminates the delimiter line.
 
 The closing delimiter is identified by scanning for a `LF` immediately followed by the exact
-delimiter characters and then immediately followed by another `LF`. The closing delimiter match is
-performed against the raw byte stream, without any margin stripping or indentation processing. The
-payload is everything between the opening `LF` (exclusive) and the closing `LF` before the
+delimiter characters and then immediately followed by another `LF`. This scan uses bare `LF`
+characters regardless of the document's line-ending mode; the `LF` characters that structurally
+delimit the literal atom (the opening `LF`, the `LF` before the closing delimiter, and the `LF`
+after the closing delimiter) are exempt from the CRLF mode requirement. The closing delimiter match
+is performed against the raw byte stream, without any margin stripping or indentation processing.
+The payload is everything between the opening `LF` (exclusive) and the closing `LF` before the
 delimiter (exclusive). The `LF` after the closing delimiter terminates the literal atom.
 
 Accordingly, an empty literal payload (a `LF` immediately followed by the delimiter and a `LF`) is
@@ -698,18 +675,20 @@ If the end of file is reached before a closing delimiter is encountered, the doc
 
 The sigil has no special meaning inside a literal atom.
 
-The line-ending mode rules of §4 do not apply inside a literal atom payload. `CR` characters within
-the payload are preserved exactly as-is and carry no special meaning; only `LF` is recognised as a
-line separator for the purpose of identifying the closing delimiter.
+The line-ending mode rules of §4 do not apply inside a literal atom payload or to the structural
+`LF` characters that bound it. `CR` characters within the payload are preserved exactly as-is and
+carry no special meaning; only bare `LF` is recognised as a line separator for the purpose of
+identifying the closing delimiter. In particular, a `CR` immediately before a `LF` inside the
+payload is payload content, not a line terminator.
 
-Literal atom payload content is raw: it is not subject to any CODL parsing rules. Indentation,
+Literal atom payload content is raw: it is not subject to any TEL parsing rules. Indentation,
 trailing spaces, and all other content are preserved exactly. The only termination condition is a
 `LF` immediately followed by the delimiter and another `LF`.
 
 Literal-atom lines are not compounds and are never members of a tabulated block. A literal atom
 always terminates any surrounding tabulated block.
 
-After the closing delimiter line and its terminating newline, parsing resumes normally. The next
+After the closing delimiter line and its line terminator, parsing resumes normally. The next
 non-literal-atom line is evaluated for indentation relative to the compound that introduced the
 literal atom, as if the literal atom lines were not present.
 
@@ -775,7 +754,7 @@ If a row violates any of these constraints, the document is invalid (see **E118*
 
 ## 18. Presentation Model and Semantic Model
 
-CODL defines both a presentation model and a semantic model.
+TEL defines both a presentation model and a semantic model.
 
 ### 18.1 Presentation Model
 
@@ -850,8 +829,8 @@ applicable. The `keywordIndex` identifies which member (and, for `Sum` members, 
 element fills, and is sufficient to recover the keyword string from the schema.
 
 The interpreter directive, pragma, comments, tabulations, and remarks are not part of the semantic
-model. There is a one-to-one mapping between presentation-layer atoms and compounds on the one
-hand, and elements on the other: every atom and every compound maps to exactly one element.
+model. There is a one-to-one mapping between presentation-layer atoms and compounds on the one hand,
+and elements on the other: every atom and every compound maps to exactly one element.
 
 ### 18.3 Mapping Procedure
 
@@ -892,7 +871,7 @@ The schema language and type assignment algorithm are defined in §20.
 
 ## 19. Schema-Governed Structure and Error Diagnosis
 
-In addition to parsing errors, a CODL document may be structurally invalid with respect to a schema.
+In addition to parsing errors, a TEL document may be structurally invalid with respect to a schema.
 
 When a schema is available, it is applied during parsing rather than as a separate post-processing
 stage. This is necessary because the schema informs certain error recovery decisions — in
@@ -902,9 +881,9 @@ single pass.
 
 ### 19.1 Atom and Compound Interchangeability
 
-Every presentation-layer atom and every presentation-layer compound corresponds to an element,
-and every element has a type. The distinction between atom and compound is therefore
-presentational rather than semantic.
+Every presentation-layer atom and every presentation-layer compound corresponds to an element, and
+every element has a type. The distinction between atom and compound is therefore presentational
+rather than semantic.
 
 A child whose type can be uniquely inferred from schema position may be written either as an atom in
 atom position or as a compound with an explicit keyword. A child whose type cannot be uniquely
@@ -959,46 +938,46 @@ specified in the tables below.
 
 #### Parsing Errors (E1xx)
 
-| Code | Section  | Description                                                                                        | Span                                                                                                        |
-| ---- | -------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| E101 | §4       | BOM present at start of document                                                                   | The BOM bytes (`[0, 3)` for a UTF-8 BOM)                                                                    |
-| E102 | §8       | Pragma is not the first non-blank line after any interpreter directive                             | The `pragma` keyword on the misplaced line                                                                  |
-| E103 | §8       | Pragma line extends beyond the first 4096 bytes                                                    | The entire pragma line                                                                                      |
-| E104 | §8       | Pragma version parameter does not have the form `x.y` with non-negative integers                   | The version atom                                                                                            |
-| E106 | §8       | Pragma sigil is a space, newline, letter, or digit                                                 | The sigil atom                                                                                              |
-| E108 | §9       | Non-blank line begins with fewer than the margin number of spaces                                  | The leading spaces of the line (zero-width at line start if no spaces)                                      |
-| E109 | §9       | Relative indentation after the margin is odd                                                       | The leading spaces of the line; extended through subsequent lines if margin adjustment persists (see §19.5) |
-| E110 | §9, §17  | Trailing spaces on a non-blank ordinary line or tabulated row                                      | The trailing space characters                                                                               |
-| E111 | §11.1    | Comment line not preceded by a blank line, another comment, start of document, or lesser-indented line | Zero-width span at the start of the comment line                                                        |
-| E112 | §14      | Line indent is less than the preceding non-blank line's indent and no ancestor has the same indent | The leading spaces of the line                                                                              |
-| E113 | §14      | Line indent exceeds the preceding non-blank line's indent by more than one                         | The leading spaces of the line                                                                              |
-| E114 | §14, §17 | Line would become a child of a comment, tabulation, or tabulated row                               | Zero-width span at the start of the line                                                                    |
-| E115 | §15      | Source atom introduced when the preceding compound already has a source or literal atom            | The first line of the duplicate source atom                                                                 |
-| E116 | §16      | Literal atom introduced when the preceding compound already has a source or literal atom           | The opening delimiter line of the duplicate literal atom                                                    |
-| E117 | §16      | Literal atom reaches end of file before its closing delimiter line                                 | The opening delimiter line                                                                                  |
-| E118 | §17      | Tabulated row has an indent different from the tabulation line                                     | The leading spaces of the row                                                                               |
-| E119 | §17      | Hard space on a tabulated row does not end at a column start boundary                              | The misaligned hard-space run                                                                               |
-| E120 | §17      | Consecutive spaces appear within a keyword, pre-column atom, or column value on a tabulated row    | The consecutive space characters within the value                                                           |
-| E121 | §17      | Column value exceeds the maximum width for that column                                             | The overflowing column value                                                                                |
-| E122 | §11.2    | Malformed tabulation line heading                                                                  | The malformed heading region (from the marker to the next marker or end of line)                            |
-| E123 | §4       | `CR` not immediately followed by `LF`, or line-ending mode inconsistency                           | The `CR` character (or `CR LF` pair that violates the established mode)                                     |
-| E124 | §8.1     | Schema identifier is not a valid URL or bare BASE64-URL hash                                       | The schema identifier atom                                                                                  |
-| E125 | §8       | Pragma line has extra atoms beyond the expected parameters, or contains a remark                    | The first extra atom, or the remark introducer                                                              |
+| Code | Section  | Description                                                                                            | Span                                                                                                        |
+| ---- | -------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| E101 | §4       | BOM present at start of document                                                                       | The BOM bytes (`[0, 3)` for a UTF-8 BOM)                                                                    |
+| E102 | §8       | Pragma is not the first non-blank line after any interpreter directive                                 | The `pragma` keyword on the misplaced line                                                                  |
+| E103 | §8       | Pragma line extends beyond the first 4096 bytes                                                        | The entire pragma line                                                                                      |
+| E104 | §8       | Pragma version parameter does not have the form `x.y` with non-negative integers                       | The version atom                                                                                            |
+| E106 | §8       | Pragma sigil is a space, `LF`, `CR`, letter, digit, or parenthetical symbol                            | The sigil atom                                                                                              |
+| E108 | §9       | Non-blank line begins with fewer than the margin number of spaces                                      | The leading spaces of the line (zero-width at line start if no spaces)                                      |
+| E109 | §9       | Relative indentation after the margin is odd                                                           | The leading spaces of the line; extended through subsequent lines if margin adjustment persists (see §19.5) |
+| E110 | §9, §17  | Trailing spaces on a non-blank ordinary line or tabulated row                                          | The trailing space characters                                                                               |
+| E111 | §11.1    | Comment line not preceded by a blank line, another comment, start of document, or lesser-indented line | Zero-width span at the start of the comment line                                                            |
+| E112 | §14      | Line indent is less than the preceding non-blank line's indent and no ancestor has the same indent     | The leading spaces of the line                                                                              |
+| E113 | §14      | Line indent exceeds the preceding non-blank line's indent by more than one                             | The leading spaces of the line                                                                              |
+| E114 | §14, §17 | Line would become a child of a comment, tabulation, or tabulated row                                   | Zero-width span at the start of the line                                                                    |
+| E115 | §15      | Source atom introduced when the preceding compound already has a source or literal atom                | The first line of the duplicate source atom                                                                 |
+| E116 | §16      | Literal atom introduced when the preceding compound already has a source or literal atom               | The opening delimiter line of the duplicate literal atom                                                    |
+| E117 | §16      | Literal atom reaches end of file before its closing delimiter line                                     | The opening delimiter line                                                                                  |
+| E118 | §17      | Tabulated row has an indent different from the tabulation line                                         | The leading spaces of the row                                                                               |
+| E119 | §17      | Hard space on a tabulated row does not end at a column start boundary                                  | The misaligned hard-space run                                                                               |
+| E120 | §17      | Consecutive spaces appear within a keyword, pre-column atom, or column value on a tabulated row        | The consecutive space characters within the value                                                           |
+| E121 | §17      | Column value exceeds the maximum width for that column                                                 | The overflowing column value                                                                                |
+| E122 | §11.2    | Malformed tabulation line heading                                                                      | The malformed heading region (from the marker to the next marker or end of line)                            |
+| E123 | §4       | `CR` not immediately followed by `LF`, or line-ending mode inconsistency                               | The `CR` character (or `CR LF` pair that violates the established mode)                                     |
+| E124 | §8.1     | Schema identifier is not a valid URL or bare BASE64-URL hash                                           | The schema identifier atom                                                                                  |
+| E125 | §8       | Pragma line has extra atoms beyond the expected parameters, or contains a remark                       | The first extra atom, or the remark introducer                                                              |
 
 #### Schema Errors (E2xx)
 
-| Code | Section | Description                                                                                                               | Span                                           |
-| ---- | ------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| E201 | §20.1   | `Schema.document` is not a `Struct`                                                                                       | The `document` field in the schema             |
-| E202 | §20.1   | Duplicate keyword within a `Struct` (across `Product` keywords and `Sum` variant keywords)                                | The second occurrence of the duplicate keyword |
-| E203 | §20.1   | `Sum` member has an empty `variants` list                                                                                 | The `Sum` member definition                    |
-| E205 | §20.2   | Root struct has a `required` atom-assignable member (unreachable: the document root has no atoms)                         | The `required` member definition               |
-| E206 | §20.1   | `Primitive` has a non-null `default` but appears in a non-`required` member                                               | The `default` field of the `Primitive`         |
-| E207 | §20.3   | Two or more `Layer`s within a `Schema` share the same `id`                                                                | The second `Layer` with the duplicate `id`     |
-| E208 | §20.3   | A `Layer` `Sum` member has a variant keyword that overlaps with an existing keyword in the base `Struct`                  | The overlapping variant keyword in the layer   |
-| E209 | §20.3   | A `Layer` `Product` member matches an existing keyword but the base or layer member is not a `Product` with `Struct` type | The layer member definition                    |
-| E210 | §20     | `Schema.sigil` is non-null and is a space, newline, letter, or digit                                                      | The `sigil` field value                        |
-| E211 | §8, §20.1 | The keyword `pragma` appears as a `Product.keyword` or `Variant.keyword` in any `Struct`                                | The keyword definition containing `pragma`     |
+| Code | Section   | Description                                                                                                               | Span                                           |
+| ---- | --------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| E201 | §20.1     | `Schema.document` is not a `Struct`                                                                                       | The `document` field in the schema             |
+| E202 | §20.1     | Duplicate keyword within a `Struct` (across `Product` keywords and `Sum` variant keywords)                                | The second occurrence of the duplicate keyword |
+| E203 | §20.1     | `Sum` member has an empty `variants` list                                                                                 | The `Sum` member definition                    |
+| E205 | §20.2     | Root struct has a `required` atom-assignable member (unreachable: the document root has no atoms)                         | The `required` member definition               |
+| E206 | §20.1     | `Primitive` has a non-null `default` but appears in a non-`required` member                                               | The `default` field of the `Primitive`         |
+| E207 | §20.3     | Two or more `Layer`s within a `Schema` share the same `id`                                                                | The second `Layer` with the duplicate `id`     |
+| E208 | §20.3     | A `Layer` `Sum` member has a variant keyword that overlaps with an existing keyword in the base `Struct`                  | The overlapping variant keyword in the layer   |
+| E209 | §20.3     | A `Layer` `Product` member matches an existing keyword but the base or layer member is not a `Product` with `Struct` type | The layer member definition                    |
+| E210 | §20.1     | `Schema.sigil` is non-null and is a space, `LF`, `CR`, letter, digit, or parenthetical symbol                             | The `sigil` field value                        |
+| E211 | §8, §20.1 | The keyword `pragma` appears as a `Product.keyword` or `Variant.keyword` in any `Struct`                                  | The keyword definition containing `pragma`     |
 
 #### Validation Errors (E3xx)
 
@@ -1018,14 +997,15 @@ specified in the tables below.
 
 ### 19.4 Error Diagnosis
 
-Error diagnosis in CODL has at least two layers:
+Error diagnosis in TEL has three layers:
 
 - **parsing diagnosis**, which reports violations of the presentation syntax defined by this
   specification
 - **schema diagnosis**, which reports violations that arise when the presentation model is checked
   against a schema and translated into the semantic model
+- **validation diagnosis**, which reports violations of constraints in the parsing of elements
 
-These two layers SHOULD be distinguished in diagnostics.
+These three layers SHOULD be distinguished in diagnostics.
 
 A conforming implementation SHOULD report multiple independent errors when validating a document,
 rather than halting at the first error encountered. Each error has a defined recovery strategy
@@ -1058,7 +1038,7 @@ before continuing. No error SHALL prevent subsequent errors from being reported.
 | E114 | Same indentation recovery as E109: the line cannot be a child of its apparent parent (a comment, tabulation, or row), so treat it as if indented one level less and use the schema to validate the adjusted placement.                                                                                                              |
 | E115 | Ignore the duplicate source atom; use the first one encountered.                                                                                                                                                                                                                                                                    |
 | E116 | Ignore the duplicate literal atom; use the first one encountered.                                                                                                                                                                                                                                                                   |
-| E117 | Treat the unclosed literal atom's payload as everything from the opening delimiter line to the end of file (excluding the final newline, if any).                                                                                                                                                                                   |
+| E117 | Treat the unclosed literal atom's payload as everything from the opening delimiter line to the end of file (excluding the final `LF`, if any).                                                                                                                                                                                   |
 | E118 | Interpret the tabulated row according to its actual hard-space positions regardless of alignment with column markers. Suppress any further alignment errors (E119, E120, E121) on the same row.                                                                                                                                     |
 | E119 | Same as E118.                                                                                                                                                                                                                                                                                                                       |
 | E120 | Same as E118.                                                                                                                                                                                                                                                                                                                       |
@@ -1171,13 +1151,21 @@ list is the normal case for a schema with no layers. Layer composition is define
 
 `Schema.sigil` is the default sigil for documents that use this schema, or `null` if the schema does
 not declare one. When non-null, it MUST satisfy the same character constraints as a pragma sigil
-(§8): it MUST NOT be a space, newline, letter, or digit (**E210**). When a document's pragma omits a
+(§8): it MUST NOT be a space, `LF`, `CR`, letter, digit, or parenthetical symbol (§5) (**E210**). When a document's pragma omits a
 sigil but provides a schema identifier that resolves to a schema with a non-null `sigil`, the
 schema's sigil is used as if it had been specified in the pragma (§8.3).
 
-CODL schemas are themselves representable as CODL documents. The CODL schema that describes the CODL
+TEL schemas are themselves representable as TEL documents. The TEL schema that describes the TEL
 schema language is therefore self-describing; the schema for schemas is identified by the schema ID
-`codl-schema`. The serialization of a schema as a CODL document is governed by that schema.
+`tel-schema`. The serialization of a schema as a TEL document is governed by that schema. Because
+schemas are TEL documents, they have a deterministic BinTEL encoding (see the
+[BinTEL Specification](bintel-spec.md)), which is used for schema hashing and identification (§8.1).
+
+`FIXME:` The `tel-schema` schema — the concrete TEL representation of the types defined above
+(`Schema`, `Layer`, `Type`, `Struct`, `Primitive`, `Flag`, `Member`, `Product`, `Sum`, `Variant`) —
+is not yet specified. This schema defines the keywords, structure, and validation rules for
+expressing schemas as TEL documents. Once defined, the `tel-schema` will be self-describing: it is
+itself a TEL document conforming to itself.
 
 A `Struct` has an ordered list of `Member`s. Each member describes one logical child slot of the
 struct and is either a `Product` or a `Sum`. Both carry the common properties `required` and
@@ -1193,7 +1181,7 @@ and type are fixed.
 A `Sum` member has a non-empty list of `Variant`s. Any variant's keyword may be used to fill that
 slot; the chosen keyword determines the type of the child node placed in that slot.
 
-`Variant.keyword` is the keyword by which a child compound of that variant is written in CODL when
+`Variant.keyword` is the keyword by which a child compound of that variant is written in TEL when
 explicit. `Variant.type` may be any `Type`. A `Sum` value looks and behaves exactly like one of its
 variants: if the chosen variant has `Struct` type, the compound child has that struct's members as
 children; if the variant has `Primitive` type, the compound child carries a value; if the variant
@@ -1223,8 +1211,8 @@ inline atoms, schema authors SHOULD order members as follows:
 1. Required `Product` members with `Primitive` type (most likely to always be present).
 2. Non-required `Product` members with `Primitive` type, prioritizing those most likely to be
    specified rather than absent.
-3. Either an all-`Flag` `Sum` member or a single `repeatable` `Product` member with `Primitive`
-   type — but not both, since only one of these can appear in the trailing atom position.
+3. Either an all-`Flag` `Sum` member or a single `repeatable` `Product` member with `Primitive` type
+   — but not both, since only one of these can appear in the trailing atom position.
 4. All remaining members (`Struct`-typed products, mixed-variant `Sum` members, and any further
    members), which will always be serialized as compound children.
 
@@ -1269,7 +1257,8 @@ A schema is invalid if any of the following holds:
 - a `Primitive` has a non-null `default` and appears in a `Member` with `required: false`
   (**E206**). Absence of a non-required member always means the member is absent; defaults are only
   meaningful for required members that may be elided in the source document.
-- `Schema.sigil` is non-null and is a space, newline, letter, or digit (**E210**)
+- `Schema.sigil` is non-null and is a space, `LF`, `CR`, letter, digit, or parenthetical symbol (§5)
+  (**E210**)
 - the keyword `pragma` appears as a `Product.keyword` or `Variant.keyword` in any `Struct`
   (**E211**)
 
@@ -1397,139 +1386,12 @@ that incorporates the layer's members into the base:
 struct R, apply `Merge` iteratively: start with R₀ = R, then Rₖ = `Merge(Rₖ₋₁, Lₖ.root)` for k = 1 …
 n. The final Rₙ is the root struct of the composed schema.
 
-### 20.4 BCODL and Schema Hashing
+### 20.4 BinTEL
 
-**BCODL** is the binary encoding of the semantic model of a CODL document. Every well-typed CODL
-document has exactly one BCODL encoding; the mapping is fully deterministic. A schema is itself a
-CODL document and therefore has a BCODL encoding.
-
-**Value hash.** The **value hash** of a CODL document is the SHA-256 digest of its BCODL
-representation excluding the magic number and schema signature — that is, the hash is computed over
-only the document root encoding (§20.4.4). This is the general method for hashing any semantic CODL
-value.
-
-When used in schema identifiers (§8.1), the hash is represented as a BASE64-URL-encoded (no padding)
-string of 43 characters.
-
-#### 20.4.1 Integer Encoding
-
-All counts and byte-lengths in BCODL are non-negative integers encoded in a variable-length format.
-To encode an integer N:
-
-1. Set B = N & 0x7F (the seven least-significant bits of N).
-2. Set N = N >> 7.
-3. If N > 0, set bit 7 of B (i.e. B = B | 0x80) and write the byte B; then repeat from step 1.
-4. If N = 0, write B as the final byte (bit 7 is clear).
-
-The result is one or more bytes. Every byte except the last has bit 7 set (a **continuation byte**).
-The last byte has bit 7 clear. The seven low-order bits of each byte, concatenated from
-least-significant (first byte) to most-significant (last byte), reconstruct the original integer.
-
-Decoding: read bytes in sequence; for each byte, take bits 0–6 and OR them into the accumulator at
-the current bit offset; advance the bit offset by 7. If bit 7 of the byte is set, read the next
-byte; otherwise the integer is complete.
-
-| Value | Encoded bytes (hex) |
-| ----: | ------------------- |
-|     0 | `00`                |
-|     1 | `01`                |
-|   127 | `7F`                |
-|   128 | `80 01`             |
-|   255 | `FF 01`             |
-| 16383 | `FF 7F`             |
-| 16384 | `80 80 01`          |
-
-#### 20.4.2 Keyword Index
-
-The keyword index used in BCODL node encoding is the position of a keyword in keyword order (§20).
-Because the schema determines the type of every node from its keyword index and its parent's type,
-BCODL encodes no type tags.
-
-#### 20.4.3 File Layout
-
-A BCODL file consists of the following fields in order:
-
-1. **Magic number**: the 2 bytes `C0 D1`
-2. **Schema signature**: the byte length of the signature (integer), followed by the signature
-   bytes. The schema signature identifies the composed schema (base plus layers) used to type the
-   document. Its construction is defined in §20.4.5.
-3. **Document root**: encoded as described in §20.4.4 (root form).
-
-#### 20.4.4 Node Encoding
-
-**Document root.** The root is a virtual struct with no parent keyword. It is encoded as:
-
-1. The number of top-level child nodes (integer).
-2. Each top-level child node in order, using the struct, primitive, or flag encoding below.
-
-**Struct node** (schema type is `Struct`):
-
-1. The keyword index of this node (integer).
-2. The number of child nodes (integer).
-3. Each child node in order, recursively.
-
-**Primitive node** (schema type is `Primitive`):
-
-1. The keyword index of this node (integer).
-2. The byte length of the UTF-8 encoding of the value string (integer).
-3. The UTF-8-encoded bytes of the value string.
-
-**Flag node** (schema type is `Flag`):
-
-1. The keyword index of this node (integer).
-
-**Default values.** BCODL encodes the semantic model, in which a required `Primitive` member with a
-non-null default is semantically present even when it was absent from the source document.
-Therefore, when encoding a document to BCODL, a missing required primitive whose default is used
-MUST be encoded as a primitive node with the default value string. This ensures that the BCODL
-encoding is identical regardless of whether the member was explicitly written or filled by its
-default.
-
-There are no pad bytes, alignment constraints, or inter-node delimiters. The schema provides all
-type information needed to decode the stream unambiguously.
-
-#### 20.4.5 Schema Signature
-
-A schema signature identifies a composed schema as an ordered sequence of components: a base schema
-followed by zero or more layers. Each component is identified by its value hash (§20.4).
-
-A schema file defines a base schema and zero or more layers. Each component's hash is computed
-independently by encoding that component as a BCODL document root and taking the SHA-256 digest of
-the root encoding (excluding magic number and signature).
-
-**Encoding.** Given an ordered sequence of n component hashes h₀, h₁, …, h\_{n−1} (each 256 bits),
-the signature is computed as follows:
-
-1. Let S = 0 (a zero-valued integer of unbounded width).
-2. For each hash hᵢ, in order from i = 0 to i = n−1: a. Set S = (S << 8) XOR hᵢ.
-3. The result S has a width of 256 + (n−1)×8 bits, or equivalently 31 + n bytes.
-
-Emit the signature as `31 + n` bytes, most-significant byte first.
-
-**Correctness property.** Because each shift is only 8 bits wide but each hash is 256 bits wide, the
-lowest 8 bits of S are determined solely by the last hash h\_{n−1}. After XORing h\_{n−1} out of S and
-shifting right by 8 bits, the lowest 8 bits are determined solely by h\_{n−2}. This property holds
-at every step, enabling unambiguous decoding.
-
-**Decoding.** Given a signature S of known byte length L, and a set of candidate hashes H (the value
-hashes of all components defined in the schema file):
-
-1. Compute n = L − 31. This is the number of components.
-2. Let the output sequence be empty.
-3. Repeat n times: a. Let b = S & 0xFF (the lowest byte of S). b. Find all hashes in H whose lowest
-   byte equals b. c. For each candidate hash h: compute S′ = (S XOR h) >> 8. d. Recurse with S = S′
-   and the candidate h appended to the front of the output sequence.
-4. When n steps have been completed, S MUST be zero. If S ≠ 0, the candidate path is invalid;
-   backtrack and try the next candidate.
-5. Exactly one valid sequence MUST exist. If no valid sequence is found, or if more than one is
-   found, the signature is malformed.
-
-The decoded sequence gives the component hashes in order: h₀ (base schema), h₁ (first layer), …,
-h\_{n−1} (last layer). A BCODL decoder uses this sequence to locate and compose the schema before
-decoding the document root.
-
-Schema compatibility is defined in §8.2 in terms of subsequence relationships between decoded
-signature hash sequences.
+The binary encoding of the semantic model, BinTEL, is defined in the companion
+[BinTEL Specification](bintel-spec.md). BinTEL provides deterministic serialization of typed TEL
+documents and defines the schema signature and value hash constructions used for schema
+identification (§8.1) and compatibility checking (§8.2).
 
 ## 21. Validation
 
@@ -1543,7 +1405,7 @@ A validator is identified by the string in `Primitive.validator`. This string na
 **helper method** that checks whether a given string value conforms to the primitive's constraints.
 
 Validation of primitive values is, in general, too complex to express within a schema: it may
-require external data, complex algorithms, or application-specific logic. CODL therefore delegates
+require external data, complex algorithms, or application-specific logic. TEL therefore delegates
 primitive validation to helper methods provided outside the schema.
 
 ### 21.2 Request and Response
@@ -1602,7 +1464,7 @@ corresponding source location in the original document.
 
 ### 21.4 Helper Method Binding
 
-A CODL parser that wishes to enable primitive validation MUST be provided with a **callback
+A TEL parser that wishes to enable primitive validation MUST be provided with a **callback
 function** that conforms to the helper method interface: given a `ValidationRequest`, it returns a
 `ValidationResponse`. The parser invokes this callback for each `Primitive` atom encountered during
 validation. How the callback is supplied is determined by the host language or environment (e.g. as
@@ -1690,8 +1552,8 @@ follows:
    contain hard spaces when in soft-space mode.
 2. **Source atom**: used if the value cannot be an inline atom but does not contain trailing spaces
    on any line and does not require exact byte-level preservation.
-3. **Literal atom**: used if the value cannot be represented as a source atom — for example, if
-   it contains trailing spaces on a line, or if the source-atom stripping rules would alter the
+3. **Literal atom**: used if the value cannot be represented as a source atom — for example, if it
+   contains trailing spaces on a line, or if the source-atom stripping rules would alter the
    content.
 
 If a value requires source or literal atom form, it is serialized as a compound child with an
@@ -1756,21 +1618,21 @@ within their updated column spans; no heading text is added or removed by this o
 
 ### 22.3 Canonical Document Serialization
 
-A **canonical serialization** of a semantic model produces a single, deterministic CODL text
+A **canonical serialization** of a semantic model produces a single, deterministic TEL text
 representation. Canonical serialization follows the same conventions as the `construct` operation
 (§22.2) for individual compounds, extended to the entire document:
 
 - The document margin is zero.
 - No interpreter directive is included.
-- A pragma line is included, specifying the CODL version of the serializer and the schema
-  identifier. The sigil is not specified in the pragma (the default `#` is used).
+- A pragma line is included, specifying the TEL version of the serializer and the schema identifier.
+  The sigil is not specified in the pragma (the default `#` is used).
 - No comments or remarks are included anywhere in the document.
 - No tabulation lines are included; all compounds are serialized as ordinary (non-tabulated) lines.
 - No blank lines appear between children at any level.
 - The root node has no inline atoms (the document root is a virtual struct with no atom positions),
   so every root-level member is serialized as a compound child.
 - At every non-root level, the atom form escalation rules from the `construct` operation apply:
-  inline atoms are preferred, falling back to source atoms for values containing newlines, and to
+  inline atoms are preferred, falling back to source atoms for values containing `LF` characters, and to
   literal atoms as a last resort for values that source atom form cannot faithfully represent.
 - Each inline atom uses a single preceding space (`precedingSpaces = 1`).
 - Each compound child is indented by one level (two spaces) relative to its parent.
@@ -1783,7 +1645,7 @@ specification, MUST produce identical text output.
 
 ## 23. Invalidity Conditions
 
-A CODL document is invalid if any condition identified by a **E1xx** or **E3xx** error code in this
+A TEL document is invalid if any condition identified by a **E1xx** or **E3xx** error code in this
 specification is triggered. A schema is invalid if any **E2xx** condition is triggered. The complete
 taxonomy of all error conditions, their trigger sections, and their recovery strategies are given in
 §19.3 and §19.5 respectively.
@@ -1793,11 +1655,11 @@ taxonomy of all error conditions, their trigger sections, and their recovery str
 The following topics remain underspecified or unresolved:
 
 - **Complete error taxonomy.** Error codes E101–E125 (parsing), E201–E211 (schema), and E301–E311
-  (validation) are believed to be complete. A malformed schema _document_ (as opposed to a
-  malformed schema _definition_) is not a separate error category: since schemas are CODL documents
-  typed by the `codl-schema` schema, errors in a schema document are ordinary parsing and
-  validation errors reported against that schema. No additional error codes are believed to be
-  needed, but this has not been exhaustively verified.
+  (validation) are believed to be complete. A malformed schema _document_ (as opposed to a malformed
+  schema _definition_) is not a separate error category: since schemas are TEL documents typed by
+  the `tel-schema` schema, errors in a schema document are ordinary parsing and validation errors
+  reported against that schema. No additional error codes are believed to be needed, but this has
+  not been exhaustively verified.
 
 - **Mutation semantics.** The computer editor operations (§22.2) are defined individually. What is
   missing: the semantics of composing multiple operations (ordering, atomicity, conflict
@@ -1805,6 +1667,7 @@ The following topics remain underspecified or unresolved:
   replacement.
 
 - **Examples and reference algorithm.** No worked examples or reference parsing algorithm are
-  provided. What is missing: example CODL documents with their presentation models, semantic models,
-  and BCODL encodings; a reference implementation or pseudocode for the parsing algorithm; and
+  provided. What is missing: example TEL documents with their presentation models, semantic models,
+  and [BinTEL](bintel-spec.md) encodings; a reference implementation or pseudocode for the parsing
+  algorithm; and
   example schema definitions with layering.

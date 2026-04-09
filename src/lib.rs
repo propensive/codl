@@ -1,11 +1,11 @@
-/// CODL presentation model and parser.
+/// TEL presentation model and parser.
 
 use std::fmt;
 
 // ── Error types ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CodlError {
+pub struct TelError {
     pub code: ErrorCode,
     pub start: usize,
     pub end: usize,
@@ -48,13 +48,13 @@ impl ErrorCode {
     }
 }
 
-impl CodlError {
+impl TelError {
     fn new(code: ErrorCode, start: usize, end: usize) -> Self {
-        CodlError { code, start, end, message: code.message().to_string() }
+        TelError { code, start, end, message: code.message().to_string() }
     }
 
     fn with_detail(code: ErrorCode, start: usize, end: usize, detail: impl fmt::Display) -> Self {
-        CodlError { code, start, end, message: format!("{}: {}", code.message(), detail) }
+        TelError { code, start, end, message: format!("{}: {}", code.message(), detail) }
     }
 }
 
@@ -64,7 +64,7 @@ impl fmt::Display for ErrorCode {
     }
 }
 
-impl fmt::Display for CodlError {
+impl fmt::Display for TelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} [{},{}): {}", self.code, self.start, self.end, self.message)
     }
@@ -150,7 +150,7 @@ impl RawLine {
 
 pub struct ParseResult {
     pub document: Document,
-    pub errors: Vec<CodlError>,
+    pub errors: Vec<TelError>,
 }
 
 pub fn parse(input: &str) -> ParseResult {
@@ -161,7 +161,7 @@ pub fn parse(input: &str) -> ParseResult {
 
 struct ParserState {
     all_chars: Vec<char>,
-    errors: Vec<CodlError>,
+    errors: Vec<TelError>,
     sigil: char,
     margin: usize,
 }
@@ -181,7 +181,7 @@ impl ParserState {
 
         // E101: BOM
         if self.all_chars.first() == Some(&'\u{FEFF}') {
-            self.errors.push(CodlError::new(ErrorCode::E101, 0, 1));
+            self.errors.push(TelError::new(ErrorCode::E101, 0, 1));
             start = 1;
         }
 
@@ -214,7 +214,7 @@ impl ParserState {
                 let byte_end: usize = self.all_chars[..raw_lines[fi].start + raw_lines[fi].chars.len()]
                     .iter().collect::<String>().len();
                 if byte_end > 4096 {
-                    self.errors.push(CodlError::new(
+                    self.errors.push(TelError::new(
                         ErrorCode::E103,
                         raw_lines[fi].start,
                         raw_lines[fi].start + raw_lines[fi].chars.len(),
@@ -223,7 +223,7 @@ impl ParserState {
                 // Check E102 - is it the first non-blank after directive?
                 // There shouldn't be non-blank lines between line_idx and fi
                 if raw_lines[line_idx..fi].iter().any(|l| !l.is_blank()) {
-                    self.errors.push(CodlError::new(
+                    self.errors.push(TelError::new(
                         ErrorCode::E102, raw_lines[fi].start, raw_lines[fi].start + 6,
                     ));
                 }
@@ -242,7 +242,7 @@ impl ParserState {
                 let t = rl.text();
                 let tr = t.trim_start();
                 if tr == "pragma" || tr.starts_with("pragma ") {
-                    self.errors.push(CodlError::new(ErrorCode::E102, rl.start, rl.start + 6));
+                    self.errors.push(TelError::new(ErrorCode::E102, rl.start, rl.start + 6));
                     break;
                 }
             }
@@ -292,11 +292,11 @@ impl ParserState {
             if in_literal(i) { i += 1; continue; }
             if chars[i] == '\r' {
                 if i + 1 >= chars.len() || chars[i + 1] != '\n' {
-                    self.errors.push(CodlError::with_detail(
+                    self.errors.push(TelError::with_detail(
                         ErrorCode::E123, i, i + 1, "CR not followed by LF",
                     ));
                 } else if established && mode == LineEndings::LF {
-                    self.errors.push(CodlError::with_detail(
+                    self.errors.push(TelError::with_detail(
                         ErrorCode::E123, i, i + 2, "CRLF in LF-mode document",
                     ));
                 }
@@ -305,7 +305,7 @@ impl ParserState {
             }
             if chars[i] == '\n' && established && mode == LineEndings::CRLF {
                 if i == start || chars[i - 1] != '\r' {
-                    self.errors.push(CodlError::with_detail(
+                    self.errors.push(TelError::with_detail(
                         ErrorCode::E123, i, i + 1, "bare LF in CRLF-mode document",
                     ));
                 }
@@ -396,20 +396,20 @@ impl ParserState {
 
         // E125: extra atoms or remark
         if atoms.len() > 3 {
-            self.errors.push(CodlError::new(ErrorCode::E125, line_start, line_start + trimmed.len()));
+            self.errors.push(TelError::new(ErrorCode::E125, line_start, line_start + trimmed.len()));
         }
 
         let version = if !atoms.is_empty() {
             self.parse_version(atoms[0], line_start + 7)
         } else {
-            self.errors.push(CodlError::new(ErrorCode::E104, line_start, line_start + 6));
+            self.errors.push(TelError::new(ErrorCode::E104, line_start, line_start + 6));
             (1, 0)
         };
 
         let schema = if atoms.len() >= 2 {
             let s = atoms[1];
             if !self.is_valid_schema_id(s) {
-                self.errors.push(CodlError::new(ErrorCode::E124, line_start, line_start + trimmed.len()));
+                self.errors.push(TelError::new(ErrorCode::E124, line_start, line_start + trimmed.len()));
             }
             Some(s.to_string())
         } else {
@@ -422,7 +422,7 @@ impl ParserState {
             if s.len() != 1 || ch.is_ascii_alphanumeric() || ch.is_ascii_control()
                 || ch == ' ' || ch == '\n' || ch == '\r'
             {
-                self.errors.push(CodlError::new(ErrorCode::E106, line_start, line_start + trimmed.len()));
+                self.errors.push(TelError::new(ErrorCode::E106, line_start, line_start + trimmed.len()));
                 None
             } else {
                 Some(ch)
@@ -443,7 +443,7 @@ impl ParserState {
                 }
             }
         }
-        self.errors.push(CodlError::with_detail(ErrorCode::E104, offset, offset + s.len(), s));
+        self.errors.push(TelError::with_detail(ErrorCode::E104, offset, offset + s.len(), s));
         (1, 0)
     }
 
@@ -477,7 +477,7 @@ struct TreeCtx<'a> {
     idx: usize,
     margin: usize,
     sigil: char,
-    errors: Vec<CodlError>,
+    errors: Vec<TelError>,
 }
 
 /// What kind of line is this?
@@ -503,14 +503,14 @@ impl<'a> TreeCtx<'a> {
 
         // Check margin (E108)
         if chars.len() < margin {
-            self.errors.push(CodlError::with_detail(
+            self.errors.push(TelError::with_detail(
                 ErrorCode::E108, line.start, line.start + chars.len(), "line shorter than margin",
             ));
             return Some(0);
         }
         for i in 0..margin {
             if chars[i] != ' ' {
-                self.errors.push(CodlError::with_detail(
+                self.errors.push(TelError::with_detail(
                     ErrorCode::E108, line.start, line.start + i + 1, "non-space within margin",
                 ));
                 return Some(0);
@@ -520,7 +520,7 @@ impl<'a> TreeCtx<'a> {
         let after = &chars[margin..];
         let spaces = after.iter().take_while(|&&c| c == ' ').count();
         if spaces % 2 != 0 {
-            self.errors.push(CodlError::new(ErrorCode::E109, line.start, line.start + margin + spaces));
+            self.errors.push(TelError::new(ErrorCode::E109, line.start, line.start + margin + spaces));
         }
         Some(spaces / 2)
     }
@@ -586,7 +586,7 @@ impl<'a> TreeCtx<'a> {
         let chars = &self.raw[ri].chars;
         if !chars.is_empty() && *chars.last().unwrap() == ' ' {
             let ts = chars.iter().rposition(|&c| c != ' ').map(|i| i + 1).unwrap_or(0);
-            self.errors.push(CodlError::new(
+            self.errors.push(TelError::new(
                 ErrorCode::E110, self.raw[ri].start + ts, self.raw[ri].start + chars.len(),
             ));
         }
@@ -643,7 +643,7 @@ impl<'a> TreeCtx<'a> {
             if indent != expected {
                 if cur.tabulation.is_some() {
                     // Row at wrong indent inside a tabulated block → E118
-                    self.errors.push(CodlError::new(
+                    self.errors.push(TelError::new(
                         ErrorCode::E118, self.raw[ri].start, self.raw[ri].start + self.margin + indent * 2,
                     ));
                     self.idx += 1;
@@ -653,7 +653,7 @@ impl<'a> TreeCtx<'a> {
                     break; // belongs to parent
                 }
                 // E113: over-indentation outside a tabulated block
-                self.errors.push(CodlError::new(
+                self.errors.push(TelError::new(
                     ErrorCode::E113, self.raw[ri].start, self.raw[ri].start + self.margin + indent * 2,
                 ));
                 self.idx += 1;
@@ -674,7 +674,7 @@ impl<'a> TreeCtx<'a> {
                     // E111 check
                     let ok = matches!(prev_kind, PrevKind::Start | PrevKind::Blank | PrevKind::Comment);
                     if !ok {
-                        self.errors.push(CodlError::new(
+                        self.errors.push(TelError::new(
                             ErrorCode::E111, self.raw[ri].start, self.raw[ri].start,
                         ));
                     }
@@ -744,7 +744,7 @@ impl<'a> TreeCtx<'a> {
                             let next_indent = self.peek_indent(self.idx);
                             if let Some(ni) = next_indent {
                                 if ni > expected {
-                                    self.errors.push(CodlError::new(
+                                    self.errors.push(TelError::new(
                                         ErrorCode::E114, self.raw[self.idx].start, self.raw[self.idx].start,
                                     ));
                                     self.idx += 1; // skip the offending line
@@ -795,7 +795,7 @@ impl<'a> TreeCtx<'a> {
                     let hard_end = indent_spaces + space_start + space_len; // position in after-margin
                     let valid = tab.marker_offsets.iter().any(|&m| m > 0 && hard_end == m);
                     if !valid {
-                        self.errors.push(CodlError::new(
+                        self.errors.push(TelError::new(
                             ErrorCode::E119,
                             self.raw[ri].start + margin + indent_spaces + space_start,
                             self.raw[ri].start + margin + hard_end,
@@ -830,7 +830,7 @@ impl<'a> TreeCtx<'a> {
                 while col_end > col_start && after[col_end - 1] == ' ' { col_end -= 1; }
                 let width = col_end - col_start;
                 if width > max_width {
-                    self.errors.push(CodlError::new(
+                    self.errors.push(TelError::new(
                         ErrorCode::E121,
                         self.raw[ri].start + margin + col_start,
                         self.raw[ri].start + margin + col_end,
@@ -858,7 +858,7 @@ impl<'a> TreeCtx<'a> {
         if indent == ci + 2 {
             // Source atom (immediately after compound, no blank line)
             if compound.atoms.iter().any(|a| matches!(a, Atom::Source{..} | Atom::Literal{..})) {
-                self.errors.push(CodlError::new(
+                self.errors.push(TelError::new(
                     ErrorCode::E115, self.raw[ri].start, self.raw[ri].start + self.raw[ri].chars.len(),
                 ));
                 self.idx += 1;
@@ -872,7 +872,7 @@ impl<'a> TreeCtx<'a> {
         if indent == ci + 3 {
             // Literal atom (immediately after compound, no blank line)
             if compound.atoms.iter().any(|a| matches!(a, Atom::Source{..} | Atom::Literal{..})) {
-                self.errors.push(CodlError::new(
+                self.errors.push(TelError::new(
                     ErrorCode::E116, self.raw[ri].start, self.raw[ri].start + self.raw[ri].chars.len(),
                 ));
                 self.idx += 1;
@@ -987,7 +987,7 @@ impl<'a> TreeCtx<'a> {
         }
 
         if !found {
-            self.errors.push(CodlError::new(
+            self.errors.push(TelError::new(
                 ErrorCode::E117, self.raw[ri].start, self.raw[ri].start + self.raw[ri].chars.len(),
             ));
         }
@@ -1041,7 +1041,7 @@ fn has_tab_markers(content: &[char], sigil: char) -> bool {
     false
 }
 
-fn parse_tabulation(content: &[char], sigil: char, indent_spaces: usize, errors: &mut Vec<CodlError>, line_start: usize) -> Tabulation {
+fn parse_tabulation(content: &[char], sigil: char, indent_spaces: usize, errors: &mut Vec<TelError>, line_start: usize) -> Tabulation {
     // Marker offsets are stored relative to after-margin (including indent)
     let mut offsets = vec![indent_spaces]; // M_0 at indent position
     let mut space_count = 0;
@@ -1070,7 +1070,7 @@ fn parse_tabulation(content: &[char], sigil: char, indent_spaces: usize, errors:
             continue;
         }
         if after[0] != ' ' {
-            errors.push(CodlError::with_detail(
+            errors.push(TelError::with_detail(
                 ErrorCode::E122, line_start + pos, line_start + pos + 2, "non-space after marker",
             ));
             headings.push(String::new());
@@ -1081,7 +1081,7 @@ fn parse_tabulation(content: &[char], sigil: char, indent_spaces: usize, errors:
             // Hard space: check next non-space is sigil (or end)
             let next_pos = spaces;
             if next_pos < after.len() && after[next_pos] != sigil {
-                errors.push(CodlError::with_detail(
+                errors.push(TelError::with_detail(
                     ErrorCode::E122,
                     line_start + pos,
                     line_start + pos + next_pos + 1,
@@ -1097,7 +1097,7 @@ fn parse_tabulation(content: &[char], sigil: char, indent_spaces: usize, errors:
             }).unwrap_or(txt.len());
             let heading: String = txt[..end].iter().collect();
             if heading.contains(sigil) {
-                errors.push(CodlError::with_detail(
+                errors.push(TelError::with_detail(
                     ErrorCode::E122, line_start + pos, line_start + pos + 2 + end, "heading contains sigil",
                 ));
             }
@@ -1200,7 +1200,7 @@ mod tests {
                         output.push_str(&format!("  {}\n", e));
                     }
                 }
-                let check_path = path.replace(".codl", ".check");
+                let check_path = path.replace(".tel", ".check");
                 let _ = fs::write(&check_path, &output);
                 let passed = if expect_errors { has_errors } else { !has_errors };
                 (passed, output)
@@ -1215,7 +1215,7 @@ mod tests {
     fn run_dir(dir: &str, expect_errors: bool) {
         let mut entries: Vec<_> = fs::read_dir(dir).unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map(|x| x == "codl").unwrap_or(false))
+            .filter(|e| e.path().extension().map(|x| x == "tel").unwrap_or(false))
             .collect();
         entries.sort_by_key(|e| e.file_name());
 

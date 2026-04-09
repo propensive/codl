@@ -84,7 +84,7 @@ parseLine() {
   done
 }
 
-parseCodl() {
+parseTel() {
   local file IFS
   file="$1"
   filename="$file"

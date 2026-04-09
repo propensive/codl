@@ -1,6 +1,6 @@
 Document {
     interpreter_directive: Some(
-        "/usr/bin/env codl",
+        "/usr/bin/env tel",
     ),
     pragma: Some(
         Pragma {
