@@ -143,6 +143,17 @@ object SchemaCache:
     markReadOnly(target)                   // keep the registry copy read-only
     entry
 
+  // The declared layer names of the schema cached under `name`, in declaration order. Used to
+  // tab-complete the layer operands of `tel schema signature <name> [layer…]`, where the
+  // admissible layers are exactly those the named schema declares.
+  def layerNames(directory: Path on Linux, name: Text): List[Text] =
+    load(directory, name) match
+      case tel: Tel =>
+        safely(Tels.Reconstructor.fromTel(tel).layers.readable.to(List).map(_.name)).or(Nil)
+
+      case _ =>
+        Nil
+
   // The parsed schema `Tel` cached under `name`, or `Unset` if there is none.
   def load(directory: Path on Linux, name: Text): Optional[Tel] =
     ensurePreloaded(directory)

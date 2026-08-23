@@ -1904,22 +1904,88 @@ object TelServer:
     catch case _: InterruptedException => ()
     finally logSubscribers.synchronized(logSubscribers.remove(spool))
 
-  // ── Subcommands ─────────────────────────────────────────────────────────────────────────────
+  // ── Command-line interface ──────────────────────────────────────────────────────────────────
   //
-  // `tel lsp` runs the language server over stdio (what an editor launches); `tel lsp --log` streams
-  // the messages a running server sends and receives. Further subcommands can be added as new `case`
-  // branches.
+  // Ethereal serves tab-completions by re-running this dispatch in *completion mode*, where the
+  // `execute` blocks are never run. Everything the shell can offer must therefore be registered
+  // *outside* `execute`: a `Flag` read inside one registers nothing and the shell offers nothing.
+  // That is why each case below reads its flags and computes its suggestions before handing the
+  // work off. Matching a `Subcommand` is itself what suggests it, and `--help` is answered from
+  // the help tree Ethereal derives from these same registrations — so the usage text below is
+  // generated, never written by hand.
 
-  private val LspCommand       = Subcommand("lsp", "run the TEL language server over stdio (for editors)")
-  private val SchemaCommand    = Subcommand("schema", "manage the schema registry")
-  private val AddCommand       = Subcommand("add", "add a schema file to the registry")
-  private val ListCommand      = Subcommand("list", "list registered schemas")
-  private val SignatureCommand = Subcommand("signature", "show a schema's palimpsest signature")
-  private val ValidateCommand  = Subcommand("validate", "parse and validate a TEL file, reporting its errors")
+  private val ServerGroup = CommandGroup(t"Language server")
+  private val SchemaGroup = CommandGroup(t"Schema registry")
+
+  private val LspCommand =
+    Subcommand
+      ( t"lsp", t"run the TEL language server over stdio (for editors)", group = ServerGroup )
+
+  private val ValidateCommand =
+    Subcommand
+      ( t"validate", t"parse and validate a TEL file, reporting its errors", group = ServerGroup )
+
+  private val InstallCommand =
+    Subcommand(t"install", t"install tab-completions into the shell", group = ServerGroup)
+
+  private val SchemaCommand =
+    Subcommand(t"schema", t"manage the schema registry", group = SchemaGroup)
+
+  private val AddCommand      = Subcommand(t"add", t"add a schema file to the registry")
+  private val ListCommand     = Subcommand(t"list", t"list registered schemas")
+
+  private val SignatureCommand =
+    Subcommand(t"signature", t"show a schema's palimpsest signature")
+
+  // Flags carry their own descriptions and short forms, so they appear in both tab-completion and
+  // the generated help. `Flag[Unit]` is a presence-only switch: it takes no operand, so help does
+  // not show it with a `<value>` placeholder.
+  private val LogFlag =
+    Flag[Unit]
+      ( t"log", false, List('l'), t"stream the messages a running server sends and receives" )
+
+  private val LlmFlag =
+    Flag[Unit]
+      ( t"llm", false, Nil,
+        t"report problems by position only, without quoting source lines (for an LLM)" )
+
+  private val HelpFlag =
+    Flag[Unit](t"help", false, List('h'), t"describe the available subcommands and options")
+
+  // A registered schema completes to its name, described by its layers (or its signature when it
+  // declares none), so `tel schema signature <TAB>` offers what the registry actually holds.
+  private given SchemaCache.Entry is Suggestible = entry =>
+    Suggestion
+      ( entry.name,
+        if entry.layers.s.isEmpty then t"schema ${entry.id}" else t"layers: ${entry.layers}" )
+
+  private given Text is Suggestible = Suggestion(_)
+
+  // The schema registry, read through the *client's* environment rather than the daemon's: the
+  // registry lives under `$XDG_CACHE_HOME`, and in a daemon-backed CLI those differ. This runs in
+  // completion mode too, which is the point — the suggestions are the registry's real contents.
+  private def registryDirectory(using cli: Cli): Optional[Path on Linux] =
+    given Environment = cli.environment
+    safely(SchemaCache.directory)
+
+  private def registryEntries(using Cli): List[SchemaCache.Entry] =
+    registryDirectory.lay(Nil)(directory => safely(SchemaCache.entries(directory)).or(Nil))
+
+  // `arguments` carries flags alongside operands, so the positional operands are those that do not
+  // look like flags. (A leading `--` terminates flag parsing upstream, per POSIX.)
+  private def operands(arguments: List[Argument]): List[Argument] =
+    arguments.stdlib.filterNot(_().starts(t"-")).to(List)
 
   def main(args: Array[Text]): Unit = cli:
-    arguments match
-      case LspCommand() :: rest if rest.stdlib.exists(argument => argument() == t"--log") =>
+    // Read at the top level, so `--help` is offered (and honoured) for every subcommand.
+    val help = HelpFlag().present
+
+    if help then execute:
+      Out.println(service.help())
+      Exit.Ok
+
+    else arguments match
+      case LspCommand() :: _ if LogFlag().present =>
         execute:
           streamLog()
           Exit.Ok
@@ -2001,23 +2067,80 @@ object TelServer:
       case SchemaCommand() :: AddCommand() :: Pathname(file) :: _ =>
         execute(schemaAdd(file))
 
-      case SchemaCommand() :: SignatureCommand() :: Argument(name) :: layers =>
-        execute(schemaSignature(name, layers.map(_())))
+      case SchemaCommand() :: SignatureCommand() :: rest =>
+        // `select` registers the suggestions *and* reads the operand, so the schema name completes
+        // to the registry's contents and each layer operand completes to the layers that schema
+        // actually declares — minus the ones already given, which cannot be repeated.
+        val entries = registryEntries
 
-      // `--llm` selects the quotation-free, position-only report an LLM can act on directly.
-      case ValidateCommand() :: Pathname(file) :: rest =>
-        execute(validateFile(file, rest.stdlib.exists(_() == t"--llm")))
+        operands(rest) match
+          case name :: layers =>
+            val entry = name.select(entries)
+
+            val declared = entry.lay(Nil): entry =>
+              registryDirectory.lay(Nil)(SchemaCache.layerNames(_, entry.name))
+
+            // The menu title applies only once the cursor has moved past the schema name, where
+            // the operands being completed really are that schema's layers.
+            if !layers.stdlib.isEmpty && !declared.stdlib.isEmpty
+            then explain(t"layers of schema `${name()}`, in declaration order")
+
+            // Register a completion for each layer operand, excluding those already given: a layer
+            // may be selected at most once. The fold's accumulator exists to narrow each
+            // subsequent operand's suggestions, not to supply the values — a half-typed operand
+            // selects nothing but must still reach `schemaSignature` verbatim.
+            layers.stdlib.foldLeft(Nil: List[Text]): (taken, argument) =>
+              val remaining = declared.stdlib.filterNot(taken.stdlib.contains(_)).to(List)
+              argument.select(remaining).lay(taken)(taken :+ _)
+
+            execute(schemaSignature(name(), layers.map(_())))
+
+          case _ =>
+            // No schema named yet: the cursor is on the name operand, so suggest the registry.
+            rest.prim.let(_.select(entries))
+            execute(usage(t"tel schema signature <name> [layer…]"))
+
+      case ValidateCommand() :: rest =>
+        // `--llm` selects the quotation-free, position-only report an LLM can act on directly.
+        val llm = LlmFlag().present
+
+        operands(rest) match
+          case Pathname(file) :: _ => execute(validateFile(file, llm))
+          case _                   => execute(usage(t"tel validate <file> [--llm]"))
+
+      case InstallCommand() :: _ =>
+        execute(installCompletions())
+
+      // A bare `tel` is not an error: it prints the generated help and succeeds, so that a user
+      // who just runs the command discovers what it offers.
+      case Nil =>
+        execute:
+          Out.println(service.help())
+          Exit.Ok
 
       case _ =>
         execute:
-          Out.println(t"Usage:")
-          Out.println(t"  tel lsp                              run the language server over stdio")
-          Out.println(t"  tel lsp --log                        stream the server's message traffic")
-          Out.println(t"  tel schema list                      list registered schemas")
-          Out.println(t"  tel schema add <file>                add a schema to the registry")
-          Out.println(t"  tel schema signature <name> [layer…] show a schema's palimpsest signature")
-          Out.println(t"  tel validate <file> [--llm]          parse and validate a TEL file")
+          Err.println(t"tel: unrecognised command")
+          Out.println(service.help())
           Exit.Fail(1)
+
+  // A malformed invocation reports the one command's synopsis on stderr, leaving stdout clean for
+  // callers that pipe it; the full generated help stays one `--help` away.
+  private def usage(synopsis: Text)(using Stdio): Exit =
+    Err.println(t"tel: usage: $synopsis")
+    Exit.Fail(1)
+
+  // Ethereal installs shell completions from the launcher stub it already knows about, so this
+  // needs no knowledge of the shell: `ensure` locates each installed shell's completion directory
+  // and writes (or refreshes) the entry, reporting the paths it wrote.
+  private def installCompletions()(using Stdio, DaemonService[?], Diagnostics): Exit =
+    import workingDirectories.javaWorkingDirectory
+    import logging.silentLogging
+    given Entrypoint = caps.unsafe.unsafeAssumePure(summon[DaemonService[?]])
+
+    Out.println(t"Installed tab-completions at:")
+    Completions.ensure(force = true).each(Out.println(_))
+    Exit.Ok
 
   // The `tel schema …` subcommands each end at a `recover` boundary rather than a `catch`: the
   // handler names the error types the body can actually raise, so the compiler checks that every

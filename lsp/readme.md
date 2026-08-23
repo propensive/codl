@@ -46,6 +46,29 @@ It is organised around subcommands:
   `--llm` emits a quotation-free report — one line per problem, with 1-based line and column
   positions, the E-code and the message — the right shape to paste to (or pipe through) an LLM,
   which has the file and needs addresses, not excerpts.
+- **`tel install`** — write (or refresh) the shell's tab-completion entry for `tel`.
+- **`tel --help`** (or a bare `tel`) — usage, generated from the subcommand and flag declarations
+  themselves rather than maintained by hand, so it cannot drift from the real interface.
+
+### Tab completions
+
+Every subcommand, flag and operand completes. Ethereal serves completions by re-running the
+argument dispatch in *completion mode*, where the `execute` blocks are skipped, so everything the
+shell offers must be registered outside them — that is the one rule the dispatch in
+[`tel.TelServer.scala`](src/core/tel.TelServer.scala) is written around. What that buys:
+
+- `tel <TAB>` — the subcommands, grouped and described.
+- `tel lsp --<TAB>`, `tel validate --<TAB>` — only the flags that command accepts (`--log`,
+  `--llm`), each with its description and short form; `--help`/`-h` everywhere.
+- `tel schema signature <TAB>` — **the schemas the registry actually holds**, each described by its
+  declared layers (or its signature, when it has none).
+- `tel schema signature <name> <TAB>` — **that schema's layers**, in declaration order, minus any
+  already given, since a layer may be selected only once. The completion menu is titled accordingly.
+- `tel validate <TAB>`, `tel schema add <TAB>` — filenames, with `~` expansion and directory descent.
+
+The registry is read through the *client's* environment rather than the daemon's, so
+`XDG_CACHE_HOME=… tel schema signature <TAB>` completes against the registry that invocation will
+actually use.
 
 The schema **registry** lives at `$XDG_CACHE_HOME/tel/schemas` (`~/.cache/tel/schemas`), shared by the
 CLI and the LSP: `tel schema add` populates it, and the LSP resolves a document's pragma schema against
