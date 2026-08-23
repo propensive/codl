@@ -1846,11 +1846,16 @@ object TelServer:
       :+ e""
       :+ e"$path: ${problemCounts(diagnostics)}"
 
-  private def validateFile(file: Path on Local, llm: Boolean)(using Stdio, Environment, System): Exit =
+  private def validateFile(file: Path on Local, llm: Boolean)
+      ( using Stdio,
+              Environment,
+              System,
+              Status.Registry[DocumentInvalid.type | Unreadable.type] )
+  :   Exit =
     recover:
       case error: Path.Error =>
         Out.println(t"tel: could not resolve ${file.encode}: ${error.message.text}")
-        Exit.Fail(1)
+        Unreadable.exit
 
     . protect:
         SchemaCache.readText(file.encode.as[Path on Linux]) match
@@ -1866,11 +1871,11 @@ object TelServer:
             else humanReport(file.encode, lines, diagnostics).foreach(Out.println(_))
 
             val errors = diagnostics.count(severityOf(_) == Lsp.DiagnosticSeverity.Error)
-            if errors > 0 then Exit.Fail(1) else Exit.Ok
+            if errors > 0 then DocumentInvalid.exit else Exit.Ok
 
           case _ =>
             Out.println(t"tel: could not read ${file.encode}")
-            Exit.Fail(1)
+            Unreadable.exit
 
   // ── Live message log ────────────────────────────────────────────────────────────────────────
   //
@@ -1952,6 +1957,23 @@ object TelServer:
   private val HelpFlag =
     Flag[Unit](t"help", false, List('h'), t"describe the available subcommands and options")
 
+  // The exit statuses, declared alongside the flags and subcommands they accompany. Returning one
+  // from an `execute` block both sets the process's exit code and documents it: `Status.exit`
+  // demands a `Status.Registry` for its own singleton type, and `Registry` is contravariant, so
+  // each block's result type accumulates the union of the statuses reachable from it — including
+  // those returned by the handlers it calls, which declare their own `Registry` requirements. The
+  // generated help then lists them without their being written down a second time.
+  //
+  // These must be `object`s rather than `val`s: capture checking currently rejects
+  // `value.type <: value.type | other.type` for a `val`'s singleton type (soundness#1811), which
+  // would stop the union forming.
+  object UsageError extends Status(1, t"the command was not invoked correctly")
+  object DocumentInvalid extends Status(2, t"the document has validation errors")
+  object Unreadable extends Status(3, t"a file or the schema registry could not be read")
+  object SchemaRejected extends Status(4, t"the schema was not accepted into the registry")
+  object SchemaMissing extends Status(5, t"no schema of that name is registered")
+  object ServerFailed extends Status(6, t"the language server terminated abnormally")
+
   // A registered schema completes to its name, described by its layers (or its signature when it
   // declares none), so `tel schema signature <TAB>` offers what the registry actually holds.
   private given SchemaCache.Entry is Suggestible = entry =>
@@ -2005,7 +2027,7 @@ object TelServer:
           recover:
             case error: Async.Error =>
               Err.println(t"tel: the language server terminated abnormally: ${error.message.text}")
-              Exit.Fail(1)
+              ServerFailed.exit
 
           . protect:
             supervise:
@@ -2122,13 +2144,13 @@ object TelServer:
         execute:
           Err.println(t"tel: unrecognised command")
           Out.println(service.help())
-          Exit.Fail(1)
+          UsageError.exit
 
   // A malformed invocation reports the one command's synopsis on stderr, leaving stdout clean for
   // callers that pipe it; the full generated help stays one `--help` away.
-  private def usage(synopsis: Text)(using Stdio): Exit =
+  private def usage(synopsis: Text)(using Stdio, Status.Registry[UsageError.type]): Exit =
     Err.println(t"tel: usage: $synopsis")
-    Exit.Fail(1)
+    UsageError.exit
 
   // Ethereal installs shell completions from the launcher stub it already knows about, so this
   // needs no knowledge of the shell: `ensure` locates each installed shell's completion directory
@@ -2147,11 +2169,12 @@ object TelServer:
   // obligation is discharged and a new raising call cannot be added without being handled here. A
   // bare `catch case error: Error` would swallow whatever arrived, including errors these bodies
   // were never meant to absorb.
-  private def schemaList()(using Stdio, Environment, System): Exit =
+  private def schemaList()(using Stdio, Environment, System, Status.Registry[Unreadable.type])
+  :   Exit =
     recover:
       case error: Path.Error =>
         Out.println(t"tel: could not list schemas: ${error.message.text}")
-        Exit.Fail(1)
+        Unreadable.exit
 
     . protect:
         val entries = SchemaCache.entries(SchemaCache.directory)
@@ -2168,10 +2191,12 @@ object TelServer:
   // `Pathname` yields a `Path on Local` (the platform the client is running on); the registry — and
   // everything else that touches it — is typed `Path on Linux`, so the resolved path is re-encoded
   // into that world at this one boundary.
-  private def schemaAdd(file: Path on Local)(using Stdio, Environment, System): Exit =
+  private def schemaAdd(file: Path on Local)
+      ( using Stdio, Environment, System, Status.Registry[SchemaRejected.type] )
+  :   Exit =
     def failed(error: Error): Exit =
       Out.println(t"tel: could not add schema: ${error.message.text}")
-      Exit.Fail(1)
+      SchemaRejected.exit
 
     recover:
       case error: Bintel.Error     => failed(error)
@@ -2185,10 +2210,15 @@ object TelServer:
         Out.println(t"Added schema `${entry.name}` (id ${entry.id}).")
         Exit.Ok
 
-  private def schemaSignature(name: Text, layers: List[Text])(using Stdio, Environment, System): Exit =
+  private def schemaSignature(name: Text, layers: List[Text])
+      ( using Stdio,
+              Environment,
+              System,
+              Status.Registry[Unreadable.type | SchemaMissing.type] )
+  :   Exit =
     def failed(error: Error): Exit =
       Out.println(t"tel: could not compute signature: ${error.message.text}")
-      Exit.Fail(1)
+      Unreadable.exit
 
     recover:
       case error: Bintel.Error => failed(error)
@@ -2203,4 +2233,4 @@ object TelServer:
 
           case _ =>
             Out.println(t"tel: no schema named `$name` in the registry")
-            Exit.Fail(1)
+            SchemaMissing.exit

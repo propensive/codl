@@ -47,8 +47,30 @@ It is organised around subcommands:
   positions, the E-code and the message — the right shape to paste to (or pipe through) an LLM,
   which has the file and needs addresses, not excerpts.
 - **`tel install`** — write (or refresh) the shell's tab-completion entry for `tel`.
-- **`tel --help`** (or a bare `tel`) — usage, generated from the subcommand and flag declarations
-  themselves rather than maintained by hand, so it cannot drift from the real interface.
+- **`tel --help`** (or a bare `tel`) — usage, generated from the subcommand, flag and exit-status
+  declarations themselves rather than maintained by hand, so it cannot drift from the real
+  interface.
+
+### Exit statuses
+
+Failures are distinguished, so a script can tell *why* a command failed rather than just that it
+did. Each is declared as a `Status` beside the flags and subcommands, which is both what sets the
+process's exit code and what puts it in `--help` — the two cannot disagree, because the union of
+statuses a command can return is accumulated from its handlers by the type system rather than
+listed by hand.
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | success |
+| 1 | the command was not invoked correctly |
+| 2 | the document has validation errors (`tel validate`) |
+| 3 | a file or the schema registry could not be read |
+| 4 | the schema was not accepted into the registry (`tel schema add`) |
+| 5 | no schema of that name is registered |
+| 6 | the language server terminated abnormally |
+
+So `tel validate x.tel` exits 2 when the document is invalid but 3 when it cannot be read at all,
+which a caller can act on differently.
 
 ### Tab completions
 
