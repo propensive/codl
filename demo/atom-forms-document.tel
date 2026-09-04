@@ -2,7 +2,7 @@ tel 1.0 example.org/documents-by-form
 
 # This document carries three Scalar values, each in a different atom
 # form (per §14–§15 of the TEL Specification, with selection rules in
-# §22.2). The three field names indicate the form chosen; the field
+# §22.3). The three field names indicate the form chosen; the field
 # values are payloads characteristic of each form.
 
 inline-value ipv4-strict

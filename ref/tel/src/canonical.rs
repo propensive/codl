@@ -5,8 +5,8 @@
 //! semantic model equals the input's:
 //!
 //! - margin = 0, LF line endings, no interpreter directive
-//! - pragma line included; schema identifier emits the bare BASE-256
-//!   signature when one is available, otherwise the verbatim URL
+//! - pragma line included, carrying the bare BASE-256 schema signature
+//!   (§22.3: any schema reference and layer selections are omitted)
 //! - no comments, remarks, tabulations, or blank lines
 //! - children emitted in **member order** (canonical, not source)
 //! - Scalar values use the atom-form escalation of §22.2 (inline →
@@ -24,32 +24,49 @@ use crate::{
 /// Canonicalize a `Document` against a `Schema` (§22.3). The schema
 /// fixes the member order for each Struct; the result is byte-equal
 /// for any two documents with the same semantic model.
+///
+/// The signature emitted on the pragma line is the one the document carries.
+/// §22.3 requires the canonical form to *always* carry a signature, computing
+/// one when the document does not — but the composed signature is derived from
+/// the schema *document*'s BinTEL encoding (§8 of the BinTEL Specification),
+/// which a `Schema` model alone does not determine. A caller that resolved the
+/// schema knows its signature and should pass it to
+/// [`canonicalize_with_signature`]; this function is the convenience form for
+/// a document that already carries one.
 pub fn canonicalize(doc: &Document, schema: &Schema) -> String {
+    let carried = doc.pragma.as_ref().and_then(|p| p.signature.clone());
+    canonicalize_with_signature(doc, schema, carried.as_deref())
+}
+
+/// As [`canonicalize`], but emitting `signature` on the pragma line. Passing
+/// the composed signature of the schema in force is what makes the output the
+/// full canonical form of §22.3, which is always self-identifying.
+pub fn canonicalize_with_signature(
+    doc: &Document,
+    schema: &Schema,
+    signature: Option<&str>,
+) -> String {
     let mut out = String::new();
-    emit_pragma(doc, &mut out);
+    emit_pragma(doc, signature, &mut out);
     emit_struct_body(&[], &doc.children, &schema.document.members, schema, 0, &mut out);
     out
 }
 
 // ── Pragma ───────────────────────────────────────────────────────────────────
 
-fn emit_pragma(doc: &Document, out: &mut String) {
+fn emit_pragma(doc: &Document, signature: Option<&str>, out: &mut String) {
     out.push_str("tel ");
+    // §22.3: the document's pragma version, or 1.0 when it has no pragma.
     let (major, minor) = doc.pragma.as_ref()
         .map(|p| p.version)
         .unwrap_or((1, 0));
     out.push_str(&format!("{}.{}", major, minor));
-    if let Some(p) = &doc.pragma {
-        // §22.3: canonical serialization carries the bare BASE-256 schema
-        // signature alone; any schema reference and layer selections are
-        // presentation-layer conveniences and are omitted. (When no
-        // signature was carried, computing the composed signature requires
-        // the schema *document*, which this function does not receive; a
-        // reference-only pragma is emitted without a schema identification.)
-        if let Some(sig) = &p.signature {
-            out.push(' ');
-            out.push_str(sig);
-        }
+    // §22.3: the bare BASE-256 schema signature alone — any schema reference
+    // and layer selections are presentation-layer conveniences and are omitted,
+    // and the sigil is never specified (the default `#` is used).
+    if let Some(sig) = signature {
+        out.push(' ');
+        out.push_str(sig);
     }
     out.push('\n');
 }
@@ -381,9 +398,40 @@ mod tests {
         let schema = schema_string_field("name", true);
         let doc = parse("tel 1.0\n\nname Alice\n").document;
         let text = canonicalize(&doc, &schema);
-        // Expect: pragma line + name Alice\n
+        // The source document carries no signature, so none is emitted.
         assert!(text.starts_with("tel 1.0\n"), "got: {:?}", text);
         assert!(text.contains("name Alice\n"), "got: {:?}", text);
+    }
+
+    /// §22.3: the canonical form always carries a bare BASE-256 schema
+    /// signature — never a reference, never layer selections, never a sigil.
+    #[test]
+    fn canonical_pragma_carries_the_bare_signature() {
+        let schema = schema_string_field("name", true);
+        // A pragma with a reference, a layer selection and a sigil: canonical
+        // serialization must reduce all of it to the signature alone.
+        let src = "tel 1.0 example.org/thing +extra ḀḁЂЃĄąĆćȈȉЊḋЌḍĎďȐȑĒГДȕЖЗĘęȚțĜĝḞḟḠ %\n\nname Alice\n";
+        let doc = parse(src).document;
+        let sig = doc.pragma.as_ref().and_then(|p| p.signature.clone());
+        assert!(sig.is_some(), "the 33-character phrase must classify as a signature");
+        let text = canonicalize(&doc, &schema);
+        let first = text.lines().next().unwrap();
+        assert_eq!(first, format!("tel 1.0 {}", sig.unwrap()));
+        assert!(!first.contains("example.org"), "reference must be omitted: {:?}", first);
+        assert!(!first.contains('+'), "layer selections must be omitted: {:?}", first);
+        assert!(!first.ends_with('%'), "the sigil must not be emitted: {:?}", first);
+    }
+
+    /// A caller that resolved the schema supplies the composed signature, so
+    /// the canonical form is self-identifying even when the source document
+    /// carried only a reference (§22.3).
+    #[test]
+    fn canonical_pragma_accepts_a_supplied_signature() {
+        let schema = schema_string_field("name", true);
+        let doc = parse("tel 1.0 example.org/thing\n\nname Alice\n").document;
+        let supplied = "ḀḁЂЃĄąĆćȈȉЊḋЌḍĎďȐȑĒГДȕЖЗĘęȚțĜĝḞḟḠ";
+        let text = canonicalize_with_signature(&doc, &schema, Some(supplied));
+        assert_eq!(text.lines().next().unwrap(), format!("tel 1.0 {}", supplied));
     }
 
     #[test]

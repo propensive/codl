@@ -31,7 +31,7 @@ project alpha
 - **Layered schemas with safe evolution.** A base schema may be refined by ordered layers; every
   permitted layer operation produces a _subtype_ of the base, so older readers can still consume
   newer documents.
-- **Concise binary wire format.** Every TEL document has an unambiguous **BinTEL** encoding
+- **Concise binary wire format.** Every *well-typed* TEL document has an unambiguous **BinTEL** encoding
   (typically ~2× smaller than the text) for hashing, transmission, or storage.
 - **BASE-256 textual carrier.** When the wire format must travel in a text channel, BASE-256 encodes
   one byte as one Unicode letter — half the length of hex, copy-paste-safe, no escaping required.
@@ -42,7 +42,7 @@ project alpha
 
 ### Pragma
 
-Every TEL document begins with a pragma identifying the version, optional schema, and optional
+A TEL document may begin with a pragma identifying the version, optional schema, and optional
 sigil:
 
 ```tel
@@ -57,7 +57,9 @@ sigil overrides the default `#`.
 
 ### Compounds and atoms
 
-A non-blank line is a **compound**: a keyword followed by zero or more inline atoms, and optionally
+An *ordinary* line — one that is not the pragma, an interpreter directive, a document separator, a
+comment, a tabulation, or part of a source or literal atom — is a **compound**: a keyword followed
+by zero or more inline atoms, and optionally
 child blocks at one greater indent.
 
 ```tel
@@ -107,8 +109,9 @@ tel 1.0
 greeting world
 ```
 
-There are two ways to read such a source. The default reads a single document and **stops** at the
-first separator; everything after it is left untouched. That makes a TEL document a convenient
+A conforming processor must offer two ways to read such a source, neither of them a default.
+*Single-document* parsing reads one document and **stops** at the first separator; everything after
+it is left untouched. That makes a TEL document a convenient
 _header_ for some other, possibly non-TEL, content:
 
 ```tel
@@ -131,7 +134,8 @@ A schema is itself a TEL document describing the shape of conforming documents. 
 Definition coexist in one namespace: `record` (a product type), `scalar` (a leaf value with
 validators), and `select` (a sum type — a named alternation of variants). At a member position,
 `field` declares a single-keyword slot and `select` references a named sum. Cardinality defaults to
-"exactly one"; `optional` loosens to "zero or one", `repeatable` loosens to "zero or more". Layers
+"exactly one"; `optional` loosens it to "zero or one" and `repeatable` to "one or more", so the two
+together give "zero or more". Layers
 may _tighten_ these defaults in later versions but never loosen them.
 
 ```tel
@@ -157,7 +161,7 @@ document
 A document under this schema:
 
 ```tel
-tel 1.0 contact
+tel 1.0 example.org/contact
 
 name alice
 email alice@example.org
@@ -169,7 +173,8 @@ active
 
 ### Validators
 
-Each scalar may declare one or more named **validators** (applied in AND-conjunction). A record or
+Each `scalar` Definition must declare at least one **validator** or **pattern** — an unconstrained
+scalar names the built-in `String` instead — and may declare several, applied in AND-conjunction. A record or
 sum may carry its own validators for cross-field or cross-variant constraints. Validator names live
 in a single shared namespace and are resolved at parse time by a host-language callback. Four
 built-in validators are guaranteed by every conforming parser: `identifier` (kebab-case),
@@ -206,8 +211,14 @@ layer regional
 
 Every well-typed TEL document has a deterministic **BinTEL** encoding (see
 [`spec/bintel.md`](spec/bintel.md)). BinTEL is type-tag-free — the schema supplies all typing, so
-the byte stream encodes only keyword indices and scalar values. A BinTEL stream begins with the four
-bytes `B2 C4 B5 BB`, which render as the Greek letters `βτελ` in BASE-256 textual form.
+the byte stream encodes only keyword indices and scalar values. A BinTEL document begins with the
+four bytes `B2 C4 B5 BB`, which render as the Greek letters `βτελ` in BASE-256 textual form,
+followed by the document's length.
+
+That length makes each document self-framing, so BinTEL has the same two reading modes as TEL
+source: read one document and hand the caller everything after it, or read a stream by recursing on
+that continuation. Because the length is read before anything else, a reader can delimit, count,
+skip or forward documents while resolving no schema at all.
 
 The BLAKE3-256 hash of a BinTEL document root is the document's **value hash**: a stable,
 schema-aware identifier suitable for content addressing. Composed schemas (base + layers) are
@@ -226,6 +237,8 @@ whitespace or punctuation, and decodes losslessly via a single modulo operation.
 - [`spec/tel.md`](spec/tel.md) — the full TEL specification (25 sections, formal type system, error
   taxonomy, machine operations, round-trip properties).
 - [`spec/bintel.md`](spec/bintel.md) — the BinTEL wire format.
+- [`spec/telp.md`](spec/telp.md) — TELP, the path language for addressing elements of a document's
+  semantic model by keyword and key value.
 - [`spec/palimpsest.md`](spec/palimpsest.md) — the palimpsest construction used in composed schema
   signatures.
 - [`spec/base256.md`](spec/base256.md) — the BASE-256 textual encoding.

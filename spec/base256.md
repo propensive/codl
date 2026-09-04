@@ -5,19 +5,22 @@
 BASE-256 is a binary-to-text encoding that maps each byte of input to a single Unicode character
 drawn from a fixed 256-character alphabet. The alphabet is constructed such that decoding requires
 no lookup table: the original byte value of a character is its Unicode code point taken modulo 256.
-Every character in the alphabet has the Unicode General Category `Lu`, `Ll`, `Lt`, or `Nd` —
-uppercase, lowercase, or titlecase letter, or decimal digit — drawn from blocks used by European
-alphabets. The ten ASCII digits at positions `0x30`–`0x39` (category `Nd`) appear as the digits
-themselves; the remaining 246 positions are letters. Consequently, a contiguous run of BASE-256
+Every character in the alphabet is a letter or a decimal digit, drawn from blocks used by European
+alphabets: 115 have the Unicode General Category `Lu` (uppercase letter), 131 have `Ll` (lowercase
+letter), and 10 have `Nd` (decimal digit). The ten `Nd` characters are those at positions
+`0x30`–`0x39`, which appear as the ASCII digits themselves; the remaining 246 positions are
+letters. Consequently, a contiguous run of BASE-256
 characters forms a single word under the Unicode default word-segmentation algorithm (letters via
 rule WB5, digits via WB8, and the two joined by WB9/WB10), so it may be selected as a unit by a
 double-click in any conforming text-handling environment.
 
-BASE-256 expands input by a factor of approximately 1.5× when measured in UTF-8 bytes (since most of
-its characters are encoded in 2 or 3 UTF-8 bytes), but the length in **characters** is identical to
-the length in **bytes** of the input. The encoding is therefore most useful where the carrier medium
-is character- oriented rather than byte-oriented, where copy-and-paste handling is required, or
-where the content must be embeddable in a textual format without escaping.
+BASE-256 expands input when measured in UTF-8 bytes: 62 of its characters encode to one UTF-8 byte,
+150 to two, and 44 to three (§5), so uniformly distributed input expands by a mean factor of
+494/256 ≈ **1.93×**, and the factor ranges from 1× to 3× as the byte distribution varies. The length
+in **characters**, by contrast, is always identical to the length in **bytes** of the input. The
+encoding is therefore most useful where the carrier medium is character-oriented rather than
+byte-oriented, where copy-and-paste handling is required, or where the content must be embeddable in
+a textual format without escaping.
 
 ## 1. Status
 
@@ -44,7 +47,9 @@ The following definitions apply throughout this document:
 The alphabet is the following sequence of 256 Unicode characters, indexed from 0. The first
 form below presents the alphabet linearly (positions 0–255 in order). The second form is a
 16×16 grid: row labels are the byte's high nibble, column labels are the low nibble, so the
-character at byte `b` is found at row `b >> 4`, column `b & 0xF`.
+character at byte `b` is found at row `b >> 4`, column `b & 0xF`. The line breaks within the
+linear form are presentational only: the alphabet is the 256-character sequence obtained by
+concatenating those lines, and contains no `LF`.
 
 ```
 ḀḁЂЃĄąĆćȈȉЊḋЌḍĎďȐȑĒГДȕЖЗĘęȚțĜĝḞḟḠḡḢḣḤĥȦȧШḩЪЫЬЭĮį0123456789ĺĻļĽľĿŀABCDEFGHIJKLMNOPQRSTUVWXYZṛќѝŞşŠabc
@@ -100,8 +105,10 @@ Unicode blocks:
 - Greek Extended (`U+1F00`–`U+1FFF`)
 
 Every code point in the alphabet has the Unicode General Category `Lu` (Uppercase Letter), `Ll`
-(Lowercase Letter), `Lt` (Titlecase Letter), or `Nd` (Decimal Digit — only at positions
-`0x30`–`0x39`, which encode to the ASCII digits themselves). This is the property exploited by §7.
+(Lowercase Letter), or `Nd` (Decimal Digit). The exact composition is 115 `Lu`, 131 `Ll`, and 10
+`Nd`; the `Nd` code points are exactly those at positions `0x30`–`0x39`, which encode to the ASCII
+digits themselves. No character of the alphabet is `Lt` (Titlecase Letter). This is the property
+exploited by §7.
 
 ## 5. Encoding
 
@@ -112,15 +119,22 @@ To encode a byte sequence `B = b₀, b₁, …, b_{n-1}` (each `bᵢ` ∈ [0, 25
 
 An encoder MUST emit the encoded form as Unicode text. When that text is to be serialised to bytes
 (for example, written to a file or transmitted over a byte-oriented channel), it MUST be encoded as
-UTF-8 unless a different Unicode transformation format is agreed by the parties.
+UTF-8 unless a different Unicode transformation format is agreed by the parties. §10 states the
+constraints on normalisation and case mapping that any carrier of the encoded text must respect.
 
 The encoded length, measured in characters, equals the input length in bytes. The encoded length
 measured in UTF-8 bytes is greater than the input length and depends on the specific bytes encoded:
 
-- Input bytes in the ranges [0x30, 0x39], [0x41, 0x5A], and [0x61, 0x7A] (the ASCII digits and
-  letters) are encoded as exactly one UTF-8 byte each.
-- All other input bytes are encoded as either two or three UTF-8 bytes, drawn from the blocks listed
-  in §4.
+- The 62 input bytes in the ranges [0x30, 0x39], [0x41, 0x5A], and [0x61, 0x7A] (the ASCII digits
+  and letters) are encoded as exactly one UTF-8 byte each.
+- 150 input bytes are encoded as two UTF-8 bytes each — those whose alphabet character lies in
+  `U+0080`–`U+07FF` (Latin-1 Supplement, Latin Extended-A, Latin Extended-B, Greek and Coptic, and
+  Cyrillic).
+- The remaining 44 input bytes are encoded as three UTF-8 bytes each — those whose alphabet
+  character lies in Latin Extended Additional or Greek Extended.
+
+The total UTF-8 length of the whole alphabet is therefore `62·1 + 150·2 + 44·3 = 494` bytes, which
+is the basis of the ≈1.93× mean expansion quoted in the Abstract.
 
 ## 6. Decoding
 
@@ -159,13 +173,17 @@ always fall within one of WB5, WB8, WB9, or WB10 and are joined into a single wo
 
 Most operating systems, terminals, web browsers, and editor components implement word selection on
 double-click using either the Unicode default word segmentation directly, or a closely equivalent
-classifier that treats Unicode letters as part of the same word as their neighbours. As a result, a
-double-click anywhere within a BASE-256 string SHALL select the entire contiguous run of BASE-256
-characters — and SHALL NOT extend the selection into surrounding whitespace, punctuation, or symbol
-characters, which fall under different `Word_Break` classes and introduce word boundaries.
+classifier that treats Unicode letters as part of the same word as their neighbours. In any
+environment that does so, a double-click anywhere within a BASE-256 string selects the entire
+contiguous run of BASE-256 characters, and does not extend the selection into surrounding
+whitespace, punctuation, or symbol characters, which fall under different `Word_Break` classes and
+introduce word boundaries.
 
-This behavior is a property of the alphabet, not of any particular implementation of BASE-256. An
-encoder or decoder that conforms to this specification need take no special action to obtain it.
+This behavior is a property of the alphabet, not of any particular implementation of BASE-256, and
+this section imposes no requirement on encoders or decoders: no conformance obligation is stated
+here, because the behaviour is exhibited by the text-handling environment rather than by any
+implementation of this specification. An encoder or decoder that conforms to this specification
+need take no special action to obtain it.
 
 ## 8. Round-Trip Property
 
@@ -195,7 +213,9 @@ A decoder MAY operate in one of two modes:
 - In **strict mode**, the decoder additionally verifies that each input character is a member of the
   alphabet of §4 (for example, by membership in a precomputed set of 256 code points). If any input
   character is not a member of the alphabet, the decoder MUST report an error identifying the
-  offending character and its position within the input.
+  offending character and its position within the input, expressed as a zero-based **code-point**
+  index (not a byte offset). A decoder SHOULD report every such character rather than only the
+  first.
 
 A decoder operating in strict mode MAY pre-compute the alphabet membership set once at
 initialization and consult it in constant time per character. The alphabet membership check is the
@@ -217,12 +237,70 @@ that relies on the identity of the encoded representation — for example, by ha
 form, or by comparing encoded forms for equality — MUST operate in strict mode, or normalise to the
 canonical alphabet before such comparisons.
 
+**Unicode normalization.** BASE-256 text MUST NOT be normalised to NFD or NFKC, and MUST NOT be
+transformed by any process that applies such a normalisation. The alphabet is NFC-stable — applying
+NFC to a BASE-256 string is a no-op, so passage through an NFC-normalising channel is safe — but:
+
+- **NFD** decomposes 133 of the 256 alphabet characters into a base character followed by one or
+  more combining marks, destroying the one-character-per-byte correspondence entirely.
+- **NFKC** alters four characters — those at positions `0x3F` (`Ŀ`), `0x40` (`ŀ`), `0x7F` (`ſ`), and
+  `0xD5` (`ϕ`) — and changes the length of the string, since `Ŀ` and `ŀ` expand to two characters
+  each.
+
+A protocol that carries BASE-256 through a normalising layer therefore MUST pin that layer to NFC or
+to no normalisation at all.
+
+**Case mapping.** BASE-256 text MUST NOT be case-folded, uppercased, or lowercased. 83 of the
+alphabet's characters have a lowercase form that is *also* in the alphabet, so case mapping silently
+rewrites the data to a *different but well-formed* BASE-256 string, decoding to different bytes. This
+corruption is undetectable by the strict-mode check of §9, because the result is still drawn entirely
+from the alphabet. Applications that normalise identifier case (for example, when using a BASE-256
+string as a filename, a hostname label, or a database key) MUST exempt BASE-256 values from that
+normalisation.
+
 Some of the characters in the alphabet appear visually similar to characters not in the alphabet, or
 to one another at small font sizes. Applications that display BASE-256 strings to humans for visual
 transcription, rather than for copy-paste, SHOULD consider the suitability of the rendering font and
 SHOULD NOT rely on visual disambiguation between the alphabet and homoglyphic code points.
 
-## 11. References
+## 11. Normative Test Vectors
+
+A conforming implementation MUST reproduce every vector in this section exactly. Byte sequences are
+written in hexadecimal; encoded forms are written as the literal Unicode characters.
+
+| Input bytes | Encoded form | Note |
+| ----------- | ------------ | ---- |
+| *(empty)* | *(empty)* | The encoding of the empty sequence is the empty string. |
+| `00` | `Ḁ` | Position 0 of the alphabet, `U+1E00`. |
+| `01` | `ḁ` | Position 1, `U+1E01`. |
+| `30` | `0` | An ASCII digit; encodes to itself, one UTF-8 byte. |
+| `41` | `A` | An ASCII letter; encodes to itself. |
+| `7F` | `ſ` | `U+017F`; note that `0x7F` is *not* self-encoding. |
+| `FF` | `ǿ` | Position 255, `U+01FF`. |
+| `00 01 FF` | `Ḁḁǿ` | Concatenation is character-by-character. |
+| `41 42 43` | `ABC` | An all-ASCII-letter input is unchanged by the encoding. |
+
+**Identity vector.** Encoding the 256-byte sequence `00 01 02 … FD FE FF` yields exactly the
+alphabet of §4, in order. This vector doubles as the transcription self-check that §4 requires: an
+implementation that encodes `0..255` and compares the result against its own alphabet table has
+verified the table end to end.
+
+**Round-trip vector.** Decoding the alphabet of §4 yields the 256-byte sequence `00 01 02 … FF`. In
+strict mode (§9) this decode MUST succeed with no error reported.
+
+**Shared vector.** The value hash pinned by §3 of the [BinTEL Specification](bintel.md) — the
+BLAKE3-256 digest of the canonical `tels.tel` — provides a realistic 32-byte vector that all three
+specifications share:
+
+```
+bytes:    d440b01e327c62c41ac641047f2c4d8df3cbe94abb24db33f189226b7b8b7ad3
+BASE-256: ÔŀưḞ2żbτȚÆAĄſЬMẍỳϋῩJλḤӛ3ñẉḢkŻẋzǓ
+```
+
+The encoded form is 32 characters long, matching the 32-byte input, and occupies 64 bytes when
+serialised as UTF-8 — a 2× expansion for this particular input, against the 1.93× mean.
+
+## 12. References
 
 - The Unicode Standard, Version 15.0 (or later). The Unicode Consortium.
 - Unicode Standard Annex #29: Unicode Text Segmentation.

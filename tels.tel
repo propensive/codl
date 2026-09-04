@@ -1,6 +1,7 @@
 tel 1.0
 
-# The TEL schema-for-schemas (v1.0). Self-describing: parsing this document
+# The TEL schema-for-schemas, published as `specification.tel/tels:2.0.0`
+# (the coordinate pinned in §8.1). Self-describing: parsing this document
 # under the schema it defines yields a valid semantic model. The vocabulary
 # and surface conventions are specified in §20.5 of the TEL Specification.
 #
@@ -15,8 +16,8 @@ tel 1.0
 #
 # Type references. Every `field type` and `variant type` atom, and every
 # SelectRef's first inline atom, is a TypeName that resolves through the
-# composed Definition namespace to a record, scalar, select, or built-in
-# (`Flag`, `String`, `Identifier`, `Sigil`).
+# composed Definition namespace to a record, scalar, select, or one of the
+# five built-ins (`Flag`, `String`, `Identifier`, `Sigil`, `TypeName`).
 
 name tels
 

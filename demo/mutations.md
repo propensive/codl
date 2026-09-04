@@ -10,7 +10,7 @@ TEL document while keeping comments, remarks, and tabulation intact.
 We start with a small slice of `demo/contact-document.tel`:
 
 ```tel
-tel 1.0 https://example.org/contact
+tel 1.0 example.org/contact
 
 name  Alice Anderson
 email alice@example.org   # personal address
@@ -66,8 +66,8 @@ Compound { keyword: "phone",
            ] }
 ```
 
-The insertion uses the `construct` operation's canonical form (§22.2,
-"Atom form escalation"). Both children are atom-form scalars; the result
+The insertion uses the `construct` operation's canonical form (§22.2), whose
+atom form is chosen by **atom-form escalation** (defined in §22.3). Both children are atom-form scalars; the result
 is placed after the `email` line and before `home` (the natural position
 for the `phone` member group, per the schema's member order):
 
@@ -86,17 +86,24 @@ Note the blank line preserved between `email` and the inserted `phone` —
 the `insert` operation does not add or remove blank lines beyond the
 construct rules; existing presentation framing is retained.
 
-## Operation 3: `switch-variant` on the active/archived select
+## Operation 3: `replace` on the active/archived select
 
 Bookkeeping update — Alice's record is archived. The schema's `select`
-member has two `Flag` variants (`active`, `archived`). The agent calls:
+member has two `Flag` variants (`active`, `archived`). Switching between
+variants of one Select member is what `replace` does — §22.2 lists fifteen
+machine operations and a machine "MUST perform only operations drawn from"
+that set, so there is no separate variant-switching operation. The agent
+calls:
 
 ```
-switch-variant(target: <select compound>, new_variant: archived)
+replace(target: <select compound>, replacement: Compound { keyword: "archived" })
 ```
 
-Since the existing compound's variant is being replaced (Flag to Flag,
-same Select member), the keyword changes in place:
+`replace` requires that the replacement's keyword identify the same schema
+member as the original: here both `active` and `archived` are variants of
+the same Select member, which is exactly the case §22.2 describes as
+updating "the keyword in the presentation layer" accordingly. The keyword
+therefore changes in place:
 
 ```tel
 …
@@ -136,9 +143,11 @@ to the parent compound only.
 
 ## Operation 5: `delete` the `country` line
 
-Alice withdraws her country. The schema makes `country` required with a
-default value of `unknown`, so the deletion does not violate E307 — the
-default fills the now-absent member:
+Alice withdraws her country. `delete` requires that the removal leave the
+document schema-valid — that it not raise E307 (§22.2). The schema makes
+`country` required *with a default* of `unknown`, so eliding it is exactly
+the case the default exists for: no E307 arises, and the deletion is
+permitted:
 
 ```
 delete(target: <country scalar>)

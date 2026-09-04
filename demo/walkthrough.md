@@ -9,21 +9,25 @@ implementors can verify against their own tooling.
 ## 1. Schema
 
 ```tel
+tel 1.0 specification.tel/tels:2.0.0
+
 name greeting
 
 document
-  field text
-    scalar string
-  field bold optional
-    flag
+  field text String
+  field bold Flag optional
 ```
 
 This schema declares a document with two members:
 
-- `text`, a required scalar (validated by the built-in `string` validator —
-  any value is accepted). Required is the default for every Field; `optional`
-  loosens it.
+- `text`, a required scalar of the built-in type `String` (validated by the
+  built-in `string` validator — any value is accepted). Required is the
+  default for every Field; `optional` loosens it.
 - `bold`, an optional flag (explicit `optional`).
+
+A `field`'s type is its second inline atom, a `TypeName` (§20.5): `String`
+and `Flag` are two of the five predefined names, alongside `Identifier`,
+`Sigil` and `TypeName` itself.
 
 ## 2. The TEL document
 
@@ -87,7 +91,7 @@ The document root has two children:
 The `bold` Flag has no value bytes; the keyword index alone represents it.
 Total: 16 bytes. (The reference Rust implementation has a regression test
 that pins these exact bytes; see `walkthrough_example_encodes_as_expected`
-in `src/lib.rs`.)
+in `ref/tel/src/lib.rs`.)
 
 ## 6. Value hash (§3)
 
@@ -102,10 +106,25 @@ the same value hash.
 The complete byte stream is:
 
 ```
-C0 D1                           # magic number
+B2 C4 B5 BB                     # magic number (external-schema mode, "βτελ")
+32                              # document length: 50 bytes follow (varint)
 21 <signature bytes…>           # signature: length 33 (varint 0x21) + bytes
 02 00 0c …                      # document root (as above)
 ```
+
+The magic number is four bytes and identifies the mode: `B2 C4 B5 BB` for
+external-schema mode (§6.1), `B2 C4 B5 BC` for self-contained mode (§6.2),
+which carries the schema body inline. Rendered as BASE-256 text the two read
+`βτελ` and `βτεμ`.
+
+The **document length** counts everything after itself — here 1 byte of
+signature length, 33 of signature and 16 of document root, so 50 (`0x32`).
+It is what makes the document self-framing: a reader knows where it ends
+without decoding it, and therefore where the *continuation* begins (§6.3).
+That matters because finding the end structurally would require the composed
+schema — keyword indices determine each node's shape — so without the length
+a reader that cannot resolve the schema could not even skip the document.
+With it, framing costs four bytes plus a varint and needs no schema at all.
 
 The signature for a no-layer schema is a 33-byte palimpsest: the schema's
 32-byte BLAKE3-256 value hash followed by a one-byte cadence trailer
@@ -134,7 +153,8 @@ There are two ways to read it:
 - [`document-stream.tel`](document-stream.tel) — three independent documents
   in one source, separated by `##`.
 - [`contact-schema.tel`](contact-schema.tel) — a larger example showing
-  `define`s, `Reference` types, and a `select` with all-`flag` variants.
+  `record` definitions, references to them by `TypeName`, and a `select`
+  whose variants are all `Flag`.
 - [`contact-document.tel`](contact-document.tel) — a document conforming
   to that schema, with hard-space multi-token values.
 - [`tels.bintel.hex`](tels.bintel.hex) — the BinTEL document

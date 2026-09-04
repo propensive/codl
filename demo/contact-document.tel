@@ -1,16 +1,22 @@
+tel 1.0 example.org/contact
+
 # A TEL document conforming to the `contact` schema in
 # `demo/contact-schema.tel`.
 #
-# The pragma's schema identifier is a placeholder URL. In a real deployment
-# this would either resolve over the network to the schema document, or be
-# replaced by the BASE-256-encoded BinTEL signature of the schema (§8.1 of
-# the TEL Specification + §8 of the BinTEL Specification).
+# The pragma must be the first non-blank line of the document (§8, E102), so
+# these notes follow it rather than preceding it.
+#
+# The pragma's schema identifier is a LIRA *bare reference* — a coordinate
+# with no `:version` or `:tag` selector. A bare reference is local-only by
+# design: it resolves against the local schema cache and never triggers
+# network resolution (§8.2, resolution step 4). To make this document
+# portable, one would add a selector (`example.org/contact:1.0.0`) or carry
+# the BASE-256-encoded schema signature (§8.1 of the TEL Specification, §8
+# of the BinTEL Specification).
 #
 # Multi-token Scalar values (like a full name) use hard-space mode: a hard
 # (double) space after the keyword puts the line into hard-space mode, so
 # subsequent soft spaces become part of the value.
-
-tel 1.0 example.org/contact
 
 name  Alice Anderson
 email alice@example.org

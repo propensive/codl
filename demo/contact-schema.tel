@@ -16,7 +16,7 @@ tel 1.0 specification.tel/tels:2.0.0
 # Every `field` and `variant` carries its type as an inline atom after
 # any flags; type names are PascalCase and resolve to either a user-
 # declared `record`/`scalar`/`select` or one of the predefined names
-# `Flag`, `String`, `Identifier`, `Sigil`.
+# `Flag`, `String`, `Identifier`, `Sigil`, `TypeName`.
 #
 # To see what a document conforming to this schema looks like, see the
 # accompanying `contact-document.tel`. This schema document is itself

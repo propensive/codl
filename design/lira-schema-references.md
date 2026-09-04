@@ -1,13 +1,17 @@
 # LIRA Schema References
 
-**Status: proposal.** This document proposes replacing the URL form of the pragma schema
-identifier with LIRA coordinates, and distributing TEL schemas through the LIRA distribution
-system. It contains proposed normative wording for the affected sections of the
-[TEL Specification](../spec/tel.md), written so that merging it into the specification is
-mechanical once the wording is settled. Section and line references to the current
-specification are given as `tel.md §n` and refer to the specification as of this proposal's
-writing. The corresponding LIRA-side changes (chiefly a new `tels` discipline) are tracked as
-issues on the LIRA repository.
+**Status: merged — retained as a design record.** This document proposed replacing the URL form
+of the pragma schema identifier with LIRA coordinates, and distributing TEL schemas through the
+LIRA distribution system. **Everything in §2 and §3 has since been merged into the
+[TEL Specification](../spec/tel.md)** — the pragma grammar and classification rules into §8, the
+coordinate grammar, layer selections and signature semantics into §8.1, the resolution protocol
+into §8.2, the removal of `+` from the sigil alphabet into §6, and the layer-order rule as error
+**E124**. The specification, not this document, is normative; where the two differ, the
+specification wins.
+
+Two parts were **not** merged and remain open: the LIRA-side `tels` publishing discipline (§3.3),
+and the compatibility-grade mapping of §4. The §7 line references below were accurate when this
+proposal was written and have since drifted; treat them as historical.
 
 ## 1. Motivation
 
