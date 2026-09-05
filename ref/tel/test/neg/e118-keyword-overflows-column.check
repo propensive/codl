@@ -9,21 +9,21 @@ Document {
                 Tabulation {
                     marker_offsets: [
                         0,
-                        8,
+                        6,
                     ],
                     headings: [
+                        "ID",
                         "Name",
-                        "Age",
                     ],
                 },
             ),
             compounds: [
                 Compound {
-                    keyword: "Al",
+                    keyword: "Alexandra",
                     atoms: [
                         Inline {
-                            text: "ice 30",
-                            preceding_spaces: 2,
+                            text: "30",
+                            preceding_spaces: 1,
                         },
                     ],
                     remark: None,
@@ -35,5 +35,4 @@ Document {
     ],
 }
 errors:
-  E117 [16,18): Hard space does not end at a column boundary
-  E118 [20,22): Column value exceeds maximum width
+  E118 [17,19): Column value exceeds maximum width

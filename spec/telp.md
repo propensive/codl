@@ -53,10 +53,17 @@ delimiter  ::= "!" | '"' | "#" | "$" | "%" | "&" | "*" | "+" | ","
 **The delimiter is the first character of the path**, and that single occurrence at the start
 both selects and introduces it: the remainder of the path is split into components at every
 further occurrence of that character. The delimiter set is the sigil-valid set of TEL §6
-**minus `-` and `'`** — the two sigil-valid characters that may appear inside a kebab-case
-identifier (TEL §20.7) — leaving the twenty-two characters enumerated above. Excluding `-` and
-`'` guarantees that every schema-declarable keyword can appear as a component under every
-delimiter. `.` and `/` are RECOMMENDED as conventional choices.
+**minus `-` and `'`, plus `+`**, giving the twenty-two characters enumerated above.
+
+- `-` and `'` are excluded because they are the two sigil-valid characters that may appear
+  inside a kebab-case identifier (TEL §20.7); excluding them guarantees that every
+  schema-declarable keyword can appear as a component under every delimiter.
+- `+` is included even though it is *not* sigil-valid. TEL §6 excludes `+` from the sigil set
+  for one reason only — so that it can unambiguously introduce a layer selection on the pragma
+  line (TEL §8.1). A TELP never appears on a pragma line, so that constraint does not reach it,
+  and `+` is as serviceable a delimiter as any other.
+
+`.` and `/` are RECOMMENDED as conventional choices.
 
 Components are non-empty: an empty component — a doubled delimiter, or a trailing delimiter at
 the end of the path — is a syntax error, with one exception: a path consisting of the delimiter
@@ -138,7 +145,13 @@ never creates ambiguity, though it can mislead a human reader skimming a path wi
 schema; key values matching keywords of their own record are legal but SHOULD be avoided for
 readability.
 
-**Non-normative note (invalid documents).** Key selection is primarily meaningful for documents
+**Invalid documents.** Resolution is defined against the semantic model as it stands, whether or
+not the document is schema-valid (TEL §23). The claim in step 1 that a required member is always
+present holds only for a schema-valid document; against a document carrying **E307** the member
+is genuinely absent, and resolution fails with *absent member* exactly as for an unfilled
+optional member. No TELP failure is ever reported as, or upgraded to, a document error code.
+
+**Non-normative note (duplicate keys).** Key selection is primarily meaningful for documents
 free of E314 (TEL §21.6). Against a document carrying duplicate key values, the
 first-in-semantic-order rule above still makes resolution deterministic.
 
@@ -155,8 +168,9 @@ consist solely of ASCII digits.
 Both selector kinds operate on **same-keyword occurrences**: the sequence S of §4 step 2
 contains only children bearing the pending keyword, not all fillings of the member. For a
 `Field` member the two notions coincide. For a `SelectRef` member — whose occurrences may carry
-different variant keywords — `/pet/2` means "the third `pet`", regardless of how many
-occurrences of other variants (say `cat`) of the same Select member are interleaved among them.
+different variant keywords — the pending keyword is one *variant* keyword, never the Select's
+name. Against the schema of §10, `/dog/2` means "the third `dog`", regardless of how many `cat`
+occurrences of the same Select member are interleaved among them.
 
 The uniqueness constraint of TEL §21.6 is *broader* than this scope: key values are pairwise
 distinct across **all** keyed children of the parent filling repeatable members, across all
@@ -170,7 +184,7 @@ errors and carry no E-codes (contrast TEL §19.3). The failure kinds, informativ
 
 | Kind               | Condition                                                                     |
 | ------------------ | ----------------------------------------------------------------------------- |
-| syntax             | Empty component, invalid delimiter character, or `LF`/`CR` in the path        |
+| syntax             | Empty path, empty component, invalid delimiter character, or `LF`/`CR` in the path |
 | unknown keyword    | Keyword-step component matches nothing in the current Struct's keyword order  |
 | non-struct descent | Keyword step attempted below a `Value` or a `Flag`-typed node                 |
 | absent member      | Non-repeatable optional member not present (and no default)                   |
@@ -291,6 +305,7 @@ unwritable, but any delimiter not occurring in the value works:
 :contact:a.b/c:email:0
 ```
 
-**Shadowing.** Suppose a `contact` has key value `007`. `/contact/007` is an index selector
-(index 7, leading zeros permitted) — the occurrence keyed `007` can be selected only by its
-position, e.g. `/contact/2`.
+**Shadowing.** Suppose a third `contact` is added, with key value `007`. `/contact/007` does not
+select it: an all-digit component in selector position is always an occurrence index (§5), so the
+path is read as index 7 and fails with *index out of range* against a three-element sequence. That
+occurrence is reachable only by its position, `/contact/2`.

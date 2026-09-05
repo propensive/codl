@@ -70,12 +70,24 @@ pub fn decode_varint(bytes: &[u8]) -> Option<(u64, usize)> {
     let mut shift: u32 = 0;
     for (i, &b) in bytes.iter().enumerate() {
         let chunk = (b & 0x7F) as u64;
-        value |= chunk.checked_shl(shift)?;
+        // §4 pins the representable range to [0, 2^64 − 1]. Ten bytes carry
+        // 70 bits, so a tenth byte may contribute only the low bit; anything
+        // wider is B02 rather than a silently truncated value.
+        if shift >= 64 || (shift == 63 && chunk > 1) {
+            return None;
+        }
+        value |= chunk << shift;
         if b & 0x80 == 0 {
+            // §4 also requires the *minimal* encoding. A multi-byte encoding
+            // whose terminating byte contributes no bits is overlong (`80 00`
+            // for zero) and would give one integer many encodings, breaking
+            // the byte-determinism of §7 and the value hash of §3.
+            if i > 0 && chunk == 0 {
+                return None;
+            }
             return Some((value, i + 1));
         }
-        shift = shift.checked_add(7)?;
-        if shift > 63 { return None; }
+        shift += 7;
     }
     None // ran out of bytes before terminator
 }
@@ -128,7 +140,7 @@ pub fn keyword_type<'a>(members: &'a [Member], keyword: &str, schema: &'a Schema
 
 /// Return the member index of the member that declares the given keyword (a
 /// Field's keyword or any Select variant's keyword via SelectRef).
-fn member_index(members: &[Member], keyword: &str, schema: &Schema) -> Option<usize> {
+pub(crate) fn member_index(members: &[Member], keyword: &str, schema: &Schema) -> Option<usize> {
     for (i, m) in members.iter().enumerate() {
         match m {
             Member::Field(f) => if f.keyword == keyword { return Some(i); },
@@ -156,7 +168,7 @@ use crate::atom_text;
 /// Compound-derived elements correspond to compound lines beneath the parent.
 /// Default elements correspond to required Scalar Fields with non-null
 /// defaults that were not filled by any atom or compound child (§7.5).
-enum Element<'a> {
+pub(crate) enum Element<'a> {
     /// Compound child appearing under the parent compound.
     Compound(&'a Compound),
     /// Atom-filled Scalar element: an inline atom on the parent's line
@@ -175,7 +187,7 @@ enum Element<'a> {
 /// children in canonical order (§7.2): in member order, atom-derived
 /// elements first, then compound-derived elements, then a default
 /// substitution if applicable.
-fn enumerate_children<'a>(
+pub(crate) fn enumerate_children<'a>(
     atoms: &'a [Atom],
     blocks: &'a [Block],
     members: &'a [Member],
@@ -537,12 +549,19 @@ pub fn encode_document_with_signature_and_codecs(
     component_hashes: &[[u8; 32]],
     codec_binding: Option<&CodecBindingFn>,
 ) -> Result<Vec<u8>, EncodeError> {
+    // §6.1: the document length counts everything after the length field, so
+    // the body is built first and framed afterwards — one pass, no
+    // self-referential fixed point.
+    let mut body = Vec::new();
+    let signature = schema_signature_from_hashes(component_hashes);
+    body.extend(encode_varint(signature.len() as u64));
+    body.extend_from_slice(&signature);
+    body.extend(encode_root_with_codecs(doc, schema, codec_binding)?);
+
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
-    let signature = schema_signature_from_hashes(component_hashes);
-    out.extend(encode_varint(signature.len() as u64));
-    out.extend_from_slice(&signature);
-    out.extend(encode_root_with_codecs(doc, schema, codec_binding)?);
+    out.extend(encode_varint(body.len() as u64));
+    out.extend_from_slice(&body);
     Ok(out)
 }
 
@@ -638,13 +657,16 @@ pub fn schema_component_hashes(schema_doc: &Document) -> Vec<[u8; 32]> {
 pub struct DecodedSelfContained {
     pub signature: Vec<u8>,
     /// The embedded schema as a TEL document (the bytes that were
-    /// length-prefixed in §6.2 field 3, parsed under tels).
+    /// length-prefixed in §6.2 field 4, parsed under tels).
     pub schema_document: Document,
     /// The composed `Schema` obtained from the embedded schema document
     /// via `construct_schema` + `compose_schema`.
     pub schema: Schema,
     /// The decoded data document.
     pub document: Document,
+    /// Where this document's continuation begins (§6.3); see
+    /// [`Decoded::continuation`].
+    pub continuation: usize,
 }
 
 /// Encode a complete BinTEL document in self-contained mode (§6.2).
@@ -678,15 +700,19 @@ pub fn encode_document_self_contained_with_codecs(
     component_hashes: &[[u8; 32]],
     codec_binding: Option<&CodecBindingFn>,
 ) -> Result<Vec<u8>, EncodeError> {
+    let mut body = Vec::new();
+    let signature = schema_signature_from_hashes(component_hashes);
+    body.extend(encode_varint(signature.len() as u64));
+    body.extend_from_slice(&signature);
+    let schema_bytes = encode_root(schema_doc, &builtin_tels());
+    body.extend(encode_varint(schema_bytes.len() as u64));
+    body.extend_from_slice(&schema_bytes);
+    body.extend(encode_root_with_codecs(doc, composed_schema, codec_binding)?);
+
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC_SELF_CONTAINED);
-    let signature = schema_signature_from_hashes(component_hashes);
-    out.extend(encode_varint(signature.len() as u64));
-    out.extend_from_slice(&signature);
-    let schema_bytes = encode_root(schema_doc, &builtin_tels());
-    out.extend(encode_varint(schema_bytes.len() as u64));
-    out.extend_from_slice(&schema_bytes);
-    out.extend(encode_root_with_codecs(doc, composed_schema, codec_binding)?);
+    out.extend(encode_varint(body.len() as u64));
+    out.extend_from_slice(&body);
     Ok(out)
 }
 
@@ -739,6 +765,20 @@ pub fn decode_document_self_contained_with_codecs(
                 &bytes[0..MAGIC_SELF_CONTAINED.len()], MAGIC_SELF_CONTAINED, hint)));
     }
     cur += MAGIC_SELF_CONTAINED.len();
+
+    // §6.2 field 2: the document length, exactly as in external mode.
+    let (declared, len_consumed) = decode_varint(&bytes[cur..])
+        .ok_or_else(|| DecodeError::new(BCode::B02, "malformed document-length varint"))?;
+    cur += len_consumed;
+    let body_start = cur;
+    let declared = declared as usize;
+    if bytes.len() - cur < declared {
+        return Err(DecodeError::new(BCode::B09,
+            format!("document declares {} byte(s) but only {} remain",
+                    declared, bytes.len() - cur)));
+    }
+    let end = body_start + declared;
+    let bytes = &bytes[..end];
 
     let (signature, sig_consumed) = read_signature(&bytes[cur..])?;
     cur += sig_consumed;
@@ -794,12 +834,15 @@ pub fn decode_document_self_contained_with_codecs(
         decode_root_into_blocks_with_codecs(&bytes[cur..], &composed, &codecs, check_canonical)?;
     cur += root_consumed;
 
-    if cur < bytes.len() {
-        return Err(DecodeError::new(BCode::B08,
-            format!("{} byte(s) remained after document root", bytes.len() - cur)));
+    // B16: the declared and structural extents must agree exactly.
+    if cur != end {
+        return Err(DecodeError::new(BCode::B16,
+            format!("declared length {} but the structure consumed {}",
+                    declared, cur - body_start)));
     }
 
     Ok(DecodedSelfContained {
+        continuation: end,
         signature,
         schema_document,
         schema: composed,
@@ -812,6 +855,85 @@ pub fn decode_document_self_contained_with_codecs(
     })
 }
 
+/// A whole-document reader (§6.3): decodes exactly one document and requires
+/// that nothing follow it. Use this when the contract is "these bytes are one
+/// BinTEL document and nothing else"; use [`decode_document`] when a
+/// continuation is expected, and [`decode_stream`] to consume a sequence.
+///
+/// Rejecting a non-empty continuation is a property of *this reader's*
+/// contract, not of the bytes: the same input is a well-formed two-document
+/// stream to [`decode_stream`].
+pub fn decode_document_whole(bytes: &[u8], schema: &Schema) -> Result<Decoded, DecodeError> {
+    let decoded = decode_document(bytes, schema)?;
+    if decoded.continuation < bytes.len() {
+        return Err(DecodeError::new(BCode::B08,
+            format!("{} byte(s) remained after the document ended",
+                    bytes.len() - decoded.continuation)));
+    }
+    Ok(decoded)
+}
+
+/// Decode a stream of external-schema BinTEL documents (§6.3), yielding each
+/// in order. Defined by recursion on the continuation: decode one document,
+/// then apply the same procedure to whatever follows, until nothing does.
+///
+/// Iteration stops at the first error, which is yielded. Every document in the
+/// stream is typed by `schema`; a stream whose documents use different schemas
+/// must be driven by the caller, reading each signature and selecting a schema
+/// before decoding (which the continuation offset makes straightforward).
+pub fn decode_stream<'a>(
+    bytes: &'a [u8],
+    schema: &'a Schema,
+) -> impl Iterator<Item = Result<Decoded, DecodeError>> + 'a {
+    let mut offset = 0usize;
+    let mut stopped = false;
+    std::iter::from_fn(move || {
+        if stopped || offset >= bytes.len() {
+            return None;
+        }
+        match decode_document(&bytes[offset..], schema) {
+            Ok(d) => {
+                // The continuation is relative to the slice just decoded.
+                offset += d.continuation;
+                Some(Ok(d))
+            }
+            Err(e) => {
+                stopped = true;
+                Some(Err(e))
+            }
+        }
+    })
+}
+
+/// The extent of the BinTEL document beginning at `bytes[0]`, in bytes,
+/// **without decoding it** — read the magic number and the declared length
+/// (§6.1 field 2) and stop. This is the schema-independent framing operation
+/// of §6.3: it resolves no schema, allocates nothing proportional to the
+/// document, and costs the same for a one-byte body as for a gigabyte one.
+///
+/// Returns the total length including the magic number and the length field,
+/// so `&bytes[document_extent(bytes)?..]` is the continuation.
+pub fn document_extent(bytes: &[u8]) -> Result<usize, DecodeError> {
+    if bytes.len() < MAGIC.len() {
+        return Err(DecodeError::new(BCode::B09, "magic number truncated"));
+    }
+    let magic = &bytes[0..MAGIC.len()];
+    if magic != MAGIC && magic != MAGIC_SELF_CONTAINED {
+        return Err(DecodeError::new(BCode::B01,
+            format!("magic bytes were {:?}; expected {:?} or {:?}",
+                    magic, MAGIC, MAGIC_SELF_CONTAINED)));
+    }
+    let (declared, n) = decode_varint(&bytes[MAGIC.len()..])
+        .ok_or_else(|| DecodeError::new(BCode::B02, "malformed document-length varint"))?;
+    let total = MAGIC.len() + n + declared as usize;
+    if total > bytes.len() {
+        return Err(DecodeError::new(BCode::B09,
+            format!("document declares a total extent of {} byte(s) but only {} are available",
+                    total, bytes.len())));
+    }
+    Ok(total)
+}
+
 // ── Decoding (§§6–7) ─────────────────────────────────────────────────────────
 
 /// Result of decoding a BinTEL byte sequence: the schema signature and the
@@ -821,16 +943,29 @@ pub fn decode_document_self_contained_with_codecs(
 pub struct Decoded {
     pub signature: Vec<u8>,
     pub document: Document,
+    /// The byte offset at which this document's **continuation** begins
+    /// (§6.3): one past its last byte, as fixed by the declared document
+    /// length. Bytes from here to the end of the input are the caller's to
+    /// interpret — they may be a further BinTEL document, content in another
+    /// format, or nothing at all.
+    ///
+    /// §6.3 requires a decoder to expose this. [`decode_stream`] is the
+    /// recursion on it; a whole-document reader rejects a non-empty
+    /// continuation as B08 (see [`decode_document_whole`]).
+    pub continuation: usize,
 }
 
 /// BinTEL decoder error code, corresponding to §10 of the BinTEL
-/// Specification (B01–B15).
+/// Specification (B01–B16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BCode {
-    /// B01: Magic number absent or does not match `B2 C4 B5 BB`.
+    /// B01: Magic number absent, or matching neither `B2 C4 B5 BB`
+    /// (external-schema mode, §6.1) nor `B2 C4 B5 BC` (self-contained
+    /// mode, §6.2).
     B01,
-    /// B02: A variable-length integer extends beyond end of input, or
-    /// its accumulator overflows.
+    /// B02: A variable-length integer extends beyond end of input,
+    /// exceeds the pinned range `[0, 2^64 − 1]`, or is not in the
+    /// minimal form §4 requires.
     B02,
     /// B03: Schema signature length is not `33` (n=1) and not
     /// `37 + 2·(n − 2)` for any `n ≥ 2`, or the XOR of every signature
@@ -875,6 +1010,9 @@ pub enum BCode {
     /// `encode(decode(b)) ≠ b` — a canonicality violation indicating a
     /// non-conforming codec or corrupted input.
     B15,
+    /// B16: The document length declared in §6.1 field 2 / §6.2 field 2
+    /// disagrees with the extent the structural decode consumed.
+    B16,
 }
 
 impl BCode {
@@ -895,6 +1033,7 @@ impl BCode {
             BCode::B13 => "scalar's declared encoding is not resolved by the codec binding",
             BCode::B14 => "encoded scalar's value bytes rejected by the codec decoder",
             BCode::B15 => "codec canonicality check failed: re-encoded bytes differ",
+            BCode::B16 => "declared document length disagrees with the structural extent",
         }
     }
 }
@@ -949,20 +1088,37 @@ pub fn decode_document_with_codecs(
     }
     cur += MAGIC.len();
 
-    let (signature, sig_consumed) = read_signature(&bytes[cur..])?;
+    // §6.1 field 2: the document length delimits this document without
+    // reference to any schema, so the continuation is known before the body
+    // is decoded at all.
+    let (declared, len_consumed) = decode_varint(&bytes[cur..])
+        .ok_or_else(|| DecodeError::new(BCode::B02, "malformed document-length varint"))?;
+    cur += len_consumed;
+    let body_start = cur;
+    let declared = declared as usize;
+    if bytes.len() - cur < declared {
+        return Err(DecodeError::new(BCode::B09,
+            format!("document declares {} byte(s) but only {} remain",
+                    declared, bytes.len() - cur)));
+    }
+    let end = body_start + declared;
+
+    let (signature, sig_consumed) = read_signature(&bytes[cur..end])?;
     cur += sig_consumed;
 
     let (root_blocks, root_consumed) =
-        decode_root_into_blocks_with_codecs(&bytes[cur..], schema, &codecs, check_canonical)?;
+        decode_root_into_blocks_with_codecs(&bytes[cur..end], schema, &codecs, check_canonical)?;
     cur += root_consumed;
 
-    // B08: framing — every byte must be consumed.
-    if cur < bytes.len() {
-        return Err(DecodeError::new(BCode::B08,
-            format!("{} byte(s) remained after document root", bytes.len() - cur)));
+    // B16: the declared and structural extents must agree exactly.
+    if cur != end {
+        return Err(DecodeError::new(BCode::B16,
+            format!("declared length {} but the structure consumed {}",
+                    declared, cur - body_start)));
     }
 
     Ok(Decoded {
+        continuation: end,
         signature,
         document: Document {
             interpreter_directive: None,
@@ -1202,6 +1358,39 @@ mod tests {
             assert_eq!(dec, n);
             assert_eq!(used, expected.len());
         }
+    }
+
+    /// §4 pins the varint range and requires the minimal encoding, so that
+    /// whether a byte sequence is a valid BinTEL document is a property of the
+    /// bytes rather than of the decoder reading them.
+    #[test]
+    fn varint_rejects_overlong_encodings() {
+        // `80 00` is zero written in two bytes; `00` is the minimal form.
+        assert_eq!(decode_varint(&[0x00]), Some((0, 1)));
+        assert_eq!(decode_varint(&[0x80, 0x00]), None);
+        // `AC 82 00` is 300 written in three bytes; `AC 02` is minimal.
+        assert_eq!(decode_varint(&[0xAC, 0x02]), Some((300, 2)));
+        assert_eq!(decode_varint(&[0xAC, 0x82, 0x00]), None);
+        // A minimal encoding may of course end in a byte whose value is small
+        // but non-zero.
+        assert_eq!(decode_varint(&[0x80, 0x01]), Some((128, 2)));
+    }
+
+    #[test]
+    fn varint_range_is_pinned_to_64_bits() {
+        // 2^64 − 1 is representable: nine 0x7F groups plus a final 0x01.
+        let max = encode_varint(u64::MAX);
+        assert_eq!(max.len(), 10);
+        assert_eq!(decode_varint(&max), Some((u64::MAX, 10)));
+        // A tenth byte above 0x01 would exceed 64 bits and is rejected rather
+        // than silently truncated.
+        let mut too_wide = max.clone();
+        *too_wide.last_mut().unwrap() = 0x02;
+        assert_eq!(decode_varint(&too_wide), None);
+        // So is an eleventh byte.
+        let mut eleven = vec![0xFFu8; 10];
+        eleven.push(0x00);
+        assert_eq!(decode_varint(&eleven), None);
     }
 
     #[test]
@@ -1505,6 +1694,16 @@ mod tests {
 
     /// Build a hand-crafted 33-byte BinTEL signature whose first 32 bytes are
     /// `hash` and whose trailing byte is chosen so XOR(all 33 bytes) == 0x79.
+    /// Frame a hand-built body (everything after §6.1 field 2 — signature,
+    /// optional embedded schema, root) as a complete document, prepending the
+    /// magic number and the declared document length.
+    fn frame(magic: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = magic.to_vec();
+        out.extend(encode_varint(body.len() as u64));
+        out.extend_from_slice(body);
+        out
+    }
+
     fn craft_signature(hash: [u8; 32]) -> Vec<u8> {
         let body_xor = hash.iter().fold(0u8, |a, &b| a ^ b);
         let mut sig = hash.to_vec();
@@ -1516,19 +1715,147 @@ mod tests {
     fn bcode_b05_keyword_index_out_of_range() {
         // Magic + minimal 33-byte signature + root child_count=1 +
         // child keyword_index=99 (out of range).
-        let mut bytes = MAGIC.to_vec();
-        bytes.push(0x21);                       // sig_len = 33
-        bytes.extend_from_slice(&craft_signature([0u8; 32]));
-        bytes.push(0x01);                       // root child_count = 1
-        bytes.push(0x63);                       // keyword_index = 99 (varint)
+        let mut body = vec![0x21];              // sig_len = 33
+        body.extend_from_slice(&craft_signature([0u8; 32]));
+        body.push(0x01);                        // root child_count = 1
+        body.push(0x63);                        // keyword_index = 99 (varint)
+        let bytes = frame(&MAGIC, &body);
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B05,
                    "expected B05 for out-of-range keyword index, got: {:?}", err);
     }
 
+    // ── §6.1 field 2 / §6.3: document length, continuation, streams ────────
+
+    /// The length field counts the bytes *after* itself, so the full extent is
+    /// `4 (magic) + len(varint) + declared` — no self-referential fixed point.
+    #[test]
+    fn document_length_frames_the_document() {
+        let schema = trivial_schema();
+        let doc = name_doc("Alice");
+        let hash = value_hash(&doc, &schema);
+        let bytes = encode_document_with_signature(&doc, &schema, &[hash]);
+
+        assert_eq!(&bytes[0..4], &MAGIC);
+        let (declared, n) = decode_varint(&bytes[4..]).unwrap();
+        assert_eq!(4 + n + declared as usize, bytes.len(),
+                   "declared length must count exactly the bytes following it");
+        // Signature (1 + 33) plus the root encoding.
+        let root = encode_root(&doc, &schema);
+        assert_eq!(declared as usize, 1 + 33 + root.len());
+    }
+
+    /// B16: the declared and structural extents must agree. A forged length
+    /// must not be able to conceal bytes inside a document or expose bytes of
+    /// the next one.
+    #[test]
+    fn b16_declared_length_disagrees_with_structure() {
+        let schema = trivial_schema();
+        let doc = name_doc("Alice");
+        let hash = value_hash(&doc, &schema);
+        let good = encode_document_with_signature(&doc, &schema, &[hash]);
+        let (declared, n) = decode_varint(&good[4..]).unwrap();
+
+        // Too short: the structure runs past the declared end.
+        let mut short = good.clone();
+        short.splice(4..4 + n, encode_varint(declared - 1));
+        let err = decode_document(&short, &schema).unwrap_err();
+        assert!(matches!(err.code, BCode::B16 | BCode::B06 | BCode::B09),
+                "a short declared length must be caught, got {:?}", err);
+
+        // Too long: the structure ends before the declared end, and the extra
+        // byte is inside the document rather than in the continuation.
+        let mut long = good.clone();
+        long.splice(4..4 + n, encode_varint(declared + 1));
+        long.push(0xAB);
+        let err = decode_document(&long, &schema).unwrap_err();
+        assert_eq!(err.code, BCode::B16,
+                   "an over-long declared length is B16, got {:?}", err);
+    }
+
+    /// §6.3: stream decoding is recursion on the continuation.
+    #[test]
+    fn continuation_is_exposed_and_stream_recurses() {
+        let schema = trivial_schema();
+        let names = ["Alice", "Bob", "Carol"];
+        let mut stream = Vec::new();
+        for n in names {
+            let d = name_doc(n);
+            let h = value_hash(&d, &schema);
+            stream.extend(encode_document_with_signature(&d, &schema, &[h]));
+        }
+
+        // Single-document decoding yields the first document and points at
+        // the rest.
+        let first = decode_document(&stream, &schema).unwrap();
+        assert!(first.continuation > 0 && first.continuation < stream.len());
+        assert_eq!(scalar_text(&first.document), "Alice");
+
+        // Applying the same procedure to the continuation yields the second.
+        let second = decode_document(&stream[first.continuation..], &schema).unwrap();
+        assert_eq!(scalar_text(&second.document), "Bob");
+
+        // Which is exactly what the stream decoder does.
+        let all: Vec<_> = decode_stream(&stream, &schema)
+            .map(|r| scalar_text(&r.unwrap().document))
+            .collect();
+        assert_eq!(all, names);
+
+        // An empty input is an empty stream, not an error.
+        assert_eq!(decode_stream(&[], &schema).count(), 0);
+    }
+
+    /// §6.3: framing is schema-independent — a reader can delimit and skip
+    /// documents while resolving no schema at all. `document_extent` reads
+    /// only the magic number and the length.
+    #[test]
+    fn document_extent_needs_no_schema() {
+        let schema = trivial_schema();
+        let ext = {
+            let d = name_doc("Alice");
+            let h = value_hash(&d, &schema);
+            encode_document_with_signature(&d, &schema, &[h])
+        };
+        let (schema_doc, composed, hashes) = small_schema();
+        let selfc = encode_document_self_contained(
+            &name_doc("Bob"), &schema_doc, &composed, &hashes);
+
+        // A mixed stream: external mode, then self-contained mode.
+        let mut stream = ext.clone();
+        stream.extend_from_slice(&selfc);
+
+        // Walk it with no schema in hand.
+        let mut at = 0usize;
+        let mut extents = Vec::new();
+        while at < stream.len() {
+            let n = document_extent(&stream[at..]).unwrap();
+            extents.push(n);
+            at += n;
+        }
+        assert_eq!(extents, vec![ext.len(), selfc.len()]);
+        assert_eq!(at, stream.len());
+
+        // And the self-contained document really was skippable without ever
+        // resolving its embedded schema.
+        let decoded = decode_document_self_contained(&stream[ext.len()..]).unwrap();
+        assert_eq!(scalar_text(&decoded.document), "Bob");
+        assert_eq!(decoded.continuation, selfc.len());
+    }
+
+    /// The keyword of the sole scalar child, for the stream tests above.
+    fn scalar_text(doc: &Document) -> String {
+        doc.children.iter()
+            .flat_map(|b| b.compounds.iter())
+            .map(crate::scalar_value_text)
+            .next()
+            .unwrap_or_default()
+    }
+
     #[test]
     fn bcode_b08_trailing_bytes() {
-        // Valid stream + a stray trailing byte.
+        // A valid document plus a stray trailing byte. §6.3: this is an error
+        // only for a *whole-document* reader; `decode_document` returns the
+        // stray byte as the continuation.
         let schema = trivial_schema();
         let doc = crate::Document {
             interpreter_directive: None, pragma: None,
@@ -1546,11 +1873,23 @@ mod tests {
             }],
         };
         let hash = value_hash(&doc, &schema);
-        let mut bytes = encode_document_with_signature(&doc, &schema, &[hash]);
+        let clean = encode_document_with_signature(&doc, &schema, &[hash]);
+        let mut bytes = clean.clone();
         bytes.push(0xAB);  // stray byte
-        let err = decode_document(&bytes, &schema).unwrap_err();
+
+        // The whole-document reader rejects it.
+        let err = decode_document_whole(&bytes, &schema).unwrap_err();
         assert_eq!(err.code, BCode::B08,
                    "expected B08 for trailing bytes, got: {:?}", err);
+
+        // The single-document reader hands it back as the continuation, and
+        // the document it decoded is exactly the clean one.
+        let decoded = decode_document(&bytes, &schema).unwrap();
+        assert_eq!(decoded.continuation, clean.len());
+        assert_eq!(&bytes[decoded.continuation..], &[0xAB]);
+
+        // With nothing after it, the whole-document reader is happy.
+        assert!(decode_document_whole(&clean, &schema).is_ok());
     }
 
     #[test]
@@ -1558,8 +1897,10 @@ mod tests {
         // Just the magic, no signature.
         let bytes = MAGIC.to_vec();
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
-        assert!(matches!(err.code, BCode::B02 | BCode::B09),
-                "expected B02/B09 for truncated signature, got: {:?}", err);
+        // §10 precedence: the truncation falls inside the signature-length
+        // varint, so B02 is required — not merely one of B02/B09.
+        assert_eq!(err.code, BCode::B02,
+                   "expected B02 for a truncation inside a varint, got: {:?}", err);
     }
 
     #[test]
@@ -1578,13 +1919,13 @@ mod tests {
         // Magic + valid 33-byte signature + root child_count=1 +
         // keyword_index=0 (the only `name` field, Scalar string) +
         // value_length = 99, but no value bytes follow → B06.
-        let mut bytes = MAGIC.to_vec();
-        bytes.push(0x21);                       // sig_len = 33
-        bytes.extend_from_slice(&craft_signature([0u8; 32]));
-        bytes.push(0x01);                       // root child_count = 1
-        bytes.push(0x00);                       // keyword_index = 0 (`name`)
-        bytes.push(0x63);                       // value_length = 99 (varint)
+        let mut body = vec![0x21];              // sig_len = 33
+        body.extend_from_slice(&craft_signature([0u8; 32]));
+        body.push(0x01);                        // root child_count = 1
+        body.push(0x00);                        // keyword_index = 0 (`name`)
+        body.push(0x63);                        // value_length = 99 (varint)
         // No further bytes — claimed value length far exceeds remaining input.
+        let bytes = frame(&MAGIC, &body);
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B06,
                    "expected B06 for scalar overruns, got: {:?}", err);
@@ -1594,14 +1935,14 @@ mod tests {
     fn bcode_b07_scalar_invalid_utf8() {
         // Magic + 33-byte sig + root child_count=1 + keyword_index=0 +
         // value_length=2 + two invalid UTF-8 bytes → B07.
-        let mut bytes = MAGIC.to_vec();
-        bytes.push(0x21);                       // sig_len = 33
-        bytes.extend_from_slice(&craft_signature([0u8; 32]));
-        bytes.push(0x01);                       // root child_count = 1
-        bytes.push(0x00);                       // keyword_index = 0 (`name`)
-        bytes.push(0x02);                       // value_length = 2
-        bytes.push(0xC3);                       // lead byte of 2-byte UTF-8 seq
-        bytes.push(0x28);                       // invalid continuation (not 10xxxxxx)
+        let mut body = vec![0x21];              // sig_len = 33
+        body.extend_from_slice(&craft_signature([0u8; 32]));
+        body.push(0x01);                        // root child_count = 1
+        body.push(0x00);                        // keyword_index = 0 (`name`)
+        body.push(0x02);                        // value_length = 2
+        body.push(0xC3);                        // lead byte of 2-byte UTF-8 seq
+        body.push(0x28);                        // invalid continuation (not 10xxxxxx)
+        let bytes = frame(&MAGIC, &body);
         let err = decode_document(&bytes, &trivial_schema()).unwrap_err();
         assert_eq!(err.code, BCode::B07,
                    "expected B07 for invalid UTF-8, got: {:?}", err);
@@ -1627,11 +1968,11 @@ mod tests {
         // Encode (against a different schema; the decoder will reach the
         // dangling Reference). Simpler: hand-craft a minimal stream that
         // reaches the Reference resolution path.
-        let mut bytes = MAGIC.to_vec();
-        bytes.push(0x21);                       // sig_len = 33
-        bytes.extend_from_slice(&craft_signature([0u8; 32]));
-        bytes.push(0x01);                       // root child_count = 1
-        bytes.push(0x00);                       // keyword_index = 0 (child)
+        let mut body = vec![0x21];              // sig_len = 33
+        body.extend_from_slice(&craft_signature([0u8; 32]));
+        body.push(0x01);                        // root child_count = 1
+        body.push(0x00);                        // keyword_index = 0 (child)
+        let bytes = frame(&MAGIC, &body);
         // The decoder will look up `child`'s type, see Reference("missing-definition"),
         // attempt to resolve, fail, and emit B10.
         let err = decode_document(&bytes, &bad_schema).unwrap_err();
@@ -1719,9 +2060,16 @@ mod tests {
         // Find the embedded-schema-bytes region and flip a byte there. The
         // layout is: 4 magic + sig_len_varint + 33 sig + schema_len_varint +
         // schema_bytes + root. sig_len = 33 → encoded as 0x21 (single byte).
-        // schema_len varint is at offset 4 + 1 + 33 = 38.
-        let (schema_len, n) = decode_varint(&bytes[38..]).unwrap();
-        let schema_start = 38 + n;
+        // Locate the embedded schema body by walking the header rather than
+        // hard-coding an offset: magic, document length (§6.2 field 2),
+        // signature length, signature, then the schema-body length.
+        let mut at = MAGIC_SELF_CONTAINED.len();
+        let (_doc_len, n) = decode_varint(&bytes[at..]).unwrap();
+        at += n;
+        let (sig_len, n) = decode_varint(&bytes[at..]).unwrap();
+        at += n + sig_len as usize;
+        let (schema_len, n) = decode_varint(&bytes[at..]).unwrap();
+        let schema_start = at + n;
         // Flip a byte in the middle of the embedded schema body.
         let mid = schema_start + (schema_len as usize) / 2;
         bytes[mid] ^= 0xFF;
@@ -1803,9 +2151,25 @@ mod tests {
             Ok(encode_varint(n))
         }
         fn decode(&self, bytes: &[u8]) -> Result<String, String> {
-            let (n, used) = decode_varint(bytes).ok_or("malformed varint")?;
+            // Deliberately *lenient*: this toy codec accepts overlong
+            // encodings so that the B15 canonicality check has something to
+            // catch. It must not reuse BinTEL's framing `decode_varint`,
+            // which §4 requires to be strict about minimality — a codec is
+            // application-defined and independent of BinTEL's own framing.
+            let mut value: u64 = 0;
+            let mut shift: u32 = 0;
+            let mut used = 0usize;
+            let mut terminated = false;
+            for &b in bytes {
+                used += 1;
+                if shift >= 64 { return Err("varint too wide".to_string()); }
+                value |= ((b & 0x7F) as u64) << shift;
+                if b & 0x80 == 0 { terminated = true; break; }
+                shift += 7;
+            }
+            if !terminated { return Err("malformed varint".to_string()); }
             if used != bytes.len() { return Err("trailing bytes after varint".to_string()); }
-            Ok(n.to_string())
+            Ok(value.to_string())
         }
     }
 
@@ -1895,12 +2259,12 @@ mod tests {
         let schema = amount_schema();
         // Hand-craft: magic + signature + root with a truncated varint as
         // the value bytes (0x80 alone never terminates).
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&MAGIC);
         let signature = schema_signature_from_hashes(&[[0u8; 32]]);
-        bytes.extend(encode_varint(signature.len() as u64));
-        bytes.extend_from_slice(&signature);
-        bytes.extend_from_slice(&[0x01, 0x00, 0x01, 0x80]); // 1 child, kidx 0, len 1, bad varint
+        let mut body = Vec::new();
+        body.extend(encode_varint(signature.len() as u64));
+        body.extend_from_slice(&signature);
+        body.extend_from_slice(&[0x01, 0x00, 0x01, 0x80]); // 1 child, kidx 0, len 1, bad varint
+        let bytes = frame(&MAGIC, &body);
         let err = decode_document_with_codecs(
             &bytes, &schema, Some(&varint_binding), false).unwrap_err();
         assert_eq!(err.code, BCode::B14);
@@ -1912,12 +2276,12 @@ mod tests {
         // Overlong varint for 300: AC 82 00 — DecimalVarint's lenient
         // decoder accepts it, but re-encoding yields AC 02, so the
         // OPTIONAL canonicality check reports B15.
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&MAGIC);
         let signature = schema_signature_from_hashes(&[[0u8; 32]]);
-        bytes.extend(encode_varint(signature.len() as u64));
-        bytes.extend_from_slice(&signature);
-        bytes.extend_from_slice(&[0x01, 0x00, 0x03, 0xAC, 0x82, 0x00]);
+        let mut body = Vec::new();
+        body.extend(encode_varint(signature.len() as u64));
+        body.extend_from_slice(&signature);
+        body.extend_from_slice(&[0x01, 0x00, 0x03, 0xAC, 0x82, 0x00]);
+        let bytes = frame(&MAGIC, &body);
         // Without the check the non-canonical bytes decode "successfully"…
         let lenient = decode_document_with_codecs(
             &bytes, &schema, Some(&varint_binding), false).unwrap();

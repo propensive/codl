@@ -9,7 +9,8 @@
 //   - §7 node encoding (struct / scalar / flag)
 //   - §8 schema signature as a palimpsest at the BinTEL-pinned parameters
 //     (H, k_i, k_r) = (32, 4, 2)
-//   - §10 decoder error taxonomy (B01–B12)
+//   - §6.3 continuation and document streams
+//   - §10 decoder error taxonomy (B01–B16)
 //
 // BLAKE3 is pluggable: any function that takes a Uint8Array and returns a
 // 32-byte Uint8Array is accepted. The library carries no hashing dependency
@@ -46,7 +47,7 @@ export const BCode = Object.freeze({
   B05: "B05", // keyword index out of range
   B06: "B06", // scalar value length overruns input
   B07: "B07", // scalar bytes are not valid UTF-8
-  B08: "B08", // trailing bytes after document root
+  B08: "B08", // whole-document reader found a non-empty continuation (§6.3)
   B09: "B09", // end of input mid-decode
   B10: "B10", // Reference does not resolve to a Definition
   B11: "B11", // embedded-schema signature mismatch (self-contained)
@@ -54,6 +55,7 @@ export const BCode = Object.freeze({
   B13: "B13", // scalar's declared encoding not resolved by the codec binding
   B14: "B14", // encoded scalar's value bytes rejected by the codec decoder
   B15: "B15", // codec canonicality check failed (re-encoded bytes differ)
+  B16: "B16", // declared document length disagrees with the structural extent
 });
 
 export class BintelDecodeError extends Error {
@@ -96,17 +98,31 @@ export function decodeVarint(bytes, offset = 0) {
     const b = bytes[i++];
     value += (b & 0x7F) * shift;
     if (!Number.isSafeInteger(value)) {
-      throw new BintelDecodeError(BCode.B02, "varint accumulator overflows safe integer range");
+      // §4 pins the range to [0, 2^64 − 1]; this implementation accumulates
+      // into a JS number, so it can only reach 2^53 − 1. Every varint BinTEL
+      // actually contains is a count, a keyword index or a byte length, each
+      // bounded by the document's own size, so the shortfall is unreachable
+      // for any document a decoder could hold in memory.
+      throw new BintelDecodeError(BCode.B02, "varint exceeds this decoder's safe integer range");
     }
     if ((b & 0x80) === 0) {
+      // §4 requires the minimal encoding: a multi-byte varint whose final
+      // byte contributes no bits is overlong (`80 00` for zero) and would
+      // give one integer many encodings, breaking the byte-determinism of §7
+      // and the value hash of §3.
+      if (i - offset > 1 && (b & 0x7F) === 0) {
+        throw new BintelDecodeError(BCode.B02, "overlong (non-minimal) varint encoding");
+      }
       return { value, consumed: i - offset };
     }
     shift *= 128;
     if (shift > Number.MAX_SAFE_INTEGER) {
-      throw new BintelDecodeError(BCode.B02, "varint accumulator overflows");
+      throw new BintelDecodeError(BCode.B02, "varint exceeds this decoder's safe integer range");
     }
   }
-  throw new BintelDecodeError(BCode.B09, "varint extends past end of input");
+  // §10 precedence: a truncation falling inside a varint is B02, not the
+  // general end-of-input code B09.
+  throw new BintelDecodeError(BCode.B02, "varint extends past end of input");
 }
 
 // ── Schema-driven type resolution ────────────────────────────────────────────
@@ -485,7 +501,10 @@ export function encodeDocument(rootChildren, schema, componentHashes, codecs) {
   const signature = schemaSignatureFromHashes(componentHashes);
   const sigLenVarint = encodeVarint(signature.length);
   const root = encodeRoot(rootChildren, schema, codecs);
-  return concatBytes([MAGIC, sigLenVarint, signature, root]);
+  // §6.1 field 2: the document length counts everything after itself, so the
+  // body is built first and framed afterwards — one pass, no fixed point.
+  const body = concatBytes([sigLenVarint, signature, root]);
+  return concatBytes([MAGIC, encodeVarint(body.length), body]);
 }
 
 // Decode an external-mode BinTEL document. Returns { signature, children }.
@@ -496,13 +515,76 @@ export function encodeDocument(rootChildren, schema, componentHashes, codecs) {
 export function decodeDocument(bytes, schema, codecs, checkCanonical = false) {
   const cur = new Cursor(bytes);
   expectMagic(cur, MAGIC, "external");
+  const end = readDocumentLength(cur);
   const signature = readSignature(cur);
   const children = decodeRootFromCursor(cur, schema, makeCodecCache(codecs), checkCanonical);
-  if (cur.remaining() !== 0) {
-    throw new BintelDecodeError(BCode.B08,
-      `${cur.remaining()} byte(s) remained after document root`);
+  checkExtent(cur, end);
+  // §6.3: everything from here to the end of input is the continuation — the
+  // caller's to interpret, not ours to reject.
+  return { signature, children, continuation: end };
+}
+
+// §6.1 field 2 / §6.2 field 2. Reads the declared document length and returns
+// the absolute offset at which the document ends.
+function readDocumentLength(cur) {
+  const declared = cur.readVarint("malformed document-length varint");
+  if (cur.remaining() < declared) {
+    throw new BintelDecodeError(BCode.B09,
+      `document declares ${declared} byte(s) but only ${cur.remaining()} remain`);
   }
-  return { signature, children };
+  return cur.pos + declared;
+}
+
+// B16: the declared and structural extents must agree exactly.
+function checkExtent(cur, end) {
+  if (cur.pos !== end) {
+    throw new BintelDecodeError(BCode.B16,
+      `declared document end ${end} but the structure consumed to ${cur.pos}`);
+  }
+}
+
+// A whole-document reader (§6.3): decodes exactly one document and requires
+// that nothing follow it. Rejecting a continuation is a property of *this
+// reader's* contract, not of the bytes — `decodeStream` reads the same input
+// as a sequence.
+export function decodeDocumentWhole(bytes, schema, codecs, checkCanonical = false) {
+  const decoded = decodeDocument(bytes, schema, codecs, checkCanonical);
+  if (decoded.continuation < bytes.length) {
+    throw new BintelDecodeError(BCode.B08,
+      `${bytes.length - decoded.continuation} byte(s) remained after the document ended`);
+  }
+  return decoded;
+}
+
+// §6.3 stream decoding: recursion on the continuation. Yields each document in
+// order; every document is typed by `schema`.
+export function* decodeStream(bytes, schema, codecs, checkCanonical = false) {
+  let offset = 0;
+  while (offset < bytes.length) {
+    const d = decodeDocument(bytes.subarray(offset), schema, codecs, checkCanonical);
+    yield d;
+    offset += d.continuation;
+  }
+}
+
+// The extent of the document beginning at `bytes[0]`, **without decoding it**:
+// read the magic number and the declared length and stop. This is the
+// schema-independent framing operation of §6.3 — it resolves no schema and
+// costs the same whatever the document contains.
+export function documentExtent(bytes) {
+  const cur = new Cursor(bytes);
+  cur.expect(MAGIC.length, BCode.B09, "magic number truncated");
+  const got = cur.next(MAGIC.length);
+  if (!bytesEqual(got, MAGIC) && !bytesEqual(got, MAGIC_SELF_CONTAINED)) {
+    throw new BintelDecodeError(BCode.B01, "magic number matches neither mode");
+  }
+  const declared = cur.readVarint("malformed document-length varint");
+  const total = cur.pos + declared;
+  if (total > bytes.length) {
+    throw new BintelDecodeError(BCode.B09,
+      `document declares a total extent of ${total} byte(s) but only ${bytes.length} are available`);
+  }
+  return total;
 }
 
 function expectMagic(cur, magic, modeName) {
@@ -570,10 +652,10 @@ export function encodeDocumentSelfContained({
   const schemaBytes = encodeRoot(schemaChildren, tels);
   const schemaLenVarint = encodeVarint(schemaBytes.length);
   const root = encodeRoot(rootChildren, composedSchema, codecs);
-  return concatBytes([
-    MAGIC_SELF_CONTAINED, sigLenVarint, signature,
-    schemaLenVarint, schemaBytes, root,
+  const body = concatBytes([
+    sigLenVarint, signature, schemaLenVarint, schemaBytes, root,
   ]);
+  return concatBytes([MAGIC_SELF_CONTAINED, encodeVarint(body.length), body]);
 }
 
 // Decode a self-contained-mode BinTEL document.
@@ -595,6 +677,7 @@ export function encodeDocumentSelfContained({
 export function decodeDocumentSelfContained(bytes, { tels, buildSchema, codecs, checkCanonical = false }) {
   const cur = new Cursor(bytes);
   expectMagic(cur, MAGIC_SELF_CONTAINED, "selfContained");
+  const end = readDocumentLength(cur);
   const signature = readSignature(cur);
 
   const schemaLen = cur.readVarint("malformed embedded-schema length varint");

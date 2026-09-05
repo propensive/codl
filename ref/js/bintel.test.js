@@ -8,6 +8,9 @@ import {
   encodeDocumentSelfContained, decodeDocumentSelfContained,
   schemaToBintel, schemaSignatureFromHashes, valueHash,
   keywordIndex, lookupByIndex, keywordCount,
+  decodeDocumentWhole,
+  decodeStream,
+  documentExtent,
 } from "./bintel.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -114,10 +117,24 @@ test("varint round-trip random small/medium/large values", () => {
   }
 });
 
-test("varint malformed input → B02 / B09", () => {
-  // Truncated continuation byte.
+test("varint malformed input → B02", () => {
+  // §10 precedence: a truncation falling inside a varint is B02, not the
+  // general end-of-input code B09.
   assert.throws(() => decodeVarint(Uint8Array.from([0x80])),
-    e => e instanceof BintelDecodeError && e.code === BCode.B09);
+    e => e instanceof BintelDecodeError && e.code === BCode.B02);
+});
+
+test("varint rejects overlong encodings (§4 minimality)", () => {
+  // `80 00` is zero in two bytes; `00` is the minimal form.
+  assert.deepEqual(decodeVarint(Uint8Array.from([0x00])), { value: 0, consumed: 1 });
+  assert.throws(() => decodeVarint(Uint8Array.from([0x80, 0x00])),
+    e => e instanceof BintelDecodeError && e.code === BCode.B02);
+  // `AC 82 00` is 300 in three bytes; `AC 02` is minimal.
+  assert.deepEqual(decodeVarint(Uint8Array.from([0xAC, 0x02])), { value: 300, consumed: 2 });
+  assert.throws(() => decodeVarint(Uint8Array.from([0xAC, 0x82, 0x00])),
+    e => e instanceof BintelDecodeError && e.code === BCode.B02);
+  // A minimal encoding may still end in a small non-zero byte.
+  assert.deepEqual(decodeVarint(Uint8Array.from([0x80, 0x01])), { value: 128, consumed: 2 });
 });
 
 // ── §7 Node encoding ─────────────────────────────────────────────────────────
@@ -211,18 +228,18 @@ test("decodeDocument: self-contained magic on external decoder → B01 with hint
 
 test("decodeDocument: bad signature length → B03", () => {
   // magic + sig_len=35 (invalid: not 33 and not 37+2(n-2)) + 35 zero bytes.
-  const bytes = new Uint8Array(4 + 1 + 35);
-  bytes.set(MAGIC, 0);
-  bytes[4] = 35;
+  const body = new Uint8Array(1 + 35);
+  body[0] = 35;
+  const bytes = frame(MAGIC, body);
   assert.throws(() => decodeDocument(bytes, nameSchema),
     e => e instanceof BintelDecodeError && e.code === BCode.B03);
 });
 
 test("decodeDocument: bad cadence XOR → B03", () => {
   // magic + sig_len=33 + 33 zero bytes (XOR=0, not 0x79).
-  const bytes = new Uint8Array(4 + 1 + 33);
-  bytes.set(MAGIC, 0);
-  bytes[4] = 33;
+  const body = new Uint8Array(1 + 33);
+  body[0] = 33;
+  const bytes = frame(MAGIC, body);
   assert.throws(() => decodeDocument(bytes, nameSchema),
     e => e instanceof BintelDecodeError && e.code === BCode.B03 && /XOR/.test(e.context));
 });
@@ -230,28 +247,145 @@ test("decodeDocument: bad cadence XOR → B03", () => {
 test("decodeDocument: keyword index out of range → B05", () => {
   // magic + valid 33-byte sig + child_count=1 + kidx=99.
   const sig = craftValidSignature();
-  const bytes = new Uint8Array(4 + 1 + 33 + 1 + 1);
-  bytes.set(MAGIC, 0);
-  bytes[4] = 33;
-  bytes.set(sig, 5);
-  bytes[38] = 0x01;   // child_count
-  bytes[39] = 99;     // kidx (well over 1 member)
+  const body = new Uint8Array(1 + 33 + 1 + 1);
+  body[0] = 33;
+  body.set(sig, 1);
+  body[34] = 0x01;   // child_count
+  body[35] = 99;     // kidx (well over 1 member)
+  const bytes = frame(MAGIC, body);
   assert.throws(() => decodeDocument(bytes, nameSchema),
     e => e instanceof BintelDecodeError && e.code === BCode.B05);
 });
 
-test("decodeDocument: trailing bytes → B08", () => {
+// ── §6.1 field 2 / §6.3 document length, continuation, streams ──────────────
+
+test("document length counts the bytes after itself (§6.1 field 2)", () => {
+  const children = [{ keyword: "name", kind: "scalar", text: "Alice" }];
+  const baseHash = valueHash(children, nameSchema, stubBlake3);
+  const bytes = encodeDocument(children, nameSchema, [baseHash]);
+
+  assert.deepEqual(Array.from(bytes.subarray(0, 4)), Array.from(MAGIC));
+  const { value: declared, consumed } = decodeVarint(bytes, 4);
+  assert.equal(4 + consumed + declared, bytes.length,
+    "declared length must count exactly the bytes following it");
+  const root = encodeRoot(children, nameSchema);
+  assert.equal(declared, 1 + 33 + root.length);
+});
+
+test("B16: declared length disagreeing with the structural extent", () => {
+  const children = [{ keyword: "name", kind: "scalar", text: "Alice" }];
+  const baseHash = valueHash(children, nameSchema, stubBlake3);
+  const good = encodeDocument(children, nameSchema, [baseHash]);
+  const { value: declared, consumed } = decodeVarint(good, 4);
+  assert.equal(consumed, 1, "this fixture's length fits in one varint byte");
+
+  // Declared one byte too long, with a spare byte inside the document.
+  const long = new Uint8Array(good.length + 1);
+  long.set(good, 0);
+  long[4] = declared + 1;
+  assert.throws(() => decodeDocument(long, nameSchema),
+    e => e instanceof BintelDecodeError && e.code === BCode.B16);
+});
+
+test("continuation is exposed, and decodeStream recurses on it (§6.3)", () => {
+  const names = ["Alice", "Bob", "Carol"];
+  const parts = names.map((text) => {
+    const children = [{ keyword: "name", kind: "scalar", text }];
+    return encodeDocument(children, nameSchema,
+      [valueHash(children, nameSchema, stubBlake3)]);
+  });
+  const stream = concat(parts);
+
+  // Single-document decoding yields the first and points at the rest.
+  const first = decodeDocument(stream, nameSchema);
+  assert.equal(first.children[0].text, "Alice");
+  assert.equal(first.continuation, parts[0].length);
+
+  // The same procedure applied to the continuation yields the second.
+  const second = decodeDocument(stream.subarray(first.continuation), nameSchema);
+  assert.equal(second.children[0].text, "Bob");
+
+  // Which is what the stream decoder does.
+  const all = [...decodeStream(stream, nameSchema)].map((d) => d.children[0].text);
+  assert.deepEqual(all, names);
+
+  // An empty input is an empty stream, not an error.
+  assert.deepEqual([...decodeStream(new Uint8Array(0), nameSchema)], []);
+});
+
+test("documentExtent frames a document without resolving a schema (§6.3)", () => {
+  const dataChildren = [{ keyword: "name", kind: "scalar", text: "Alice" }];
+  const schemaChildren = [{ keyword: "name", kind: "scalar", text: "schema" }];
+  const baseHash = valueHash(schemaChildren, nameSchema, stubBlake3);
+  const ext = encodeDocument(dataChildren, nameSchema, [baseHash]);
+  const selfc = encodeDocumentSelfContained({
+    rootChildren: dataChildren, composedSchema: nameSchema,
+    schemaChildren, tels: nameSchema, componentHashes: [baseHash],
+  });
+  const stream = concat([ext, selfc]);
+
+  // Walk a mixed-mode stream with no schema in hand.
+  let at = 0;
+  const extents = [];
+  while (at < stream.length) {
+    const n = documentExtent(stream.subarray(at));
+    extents.push(n);
+    at += n;
+  }
+  assert.deepEqual(extents, [ext.length, selfc.length]);
+  assert.equal(at, stream.length);
+});
+
+function concat(parts) {
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+}
+
+test("decodeDocumentWhole: trailing bytes → B08, but decodeDocument returns them as the continuation", () => {
   const children = [{ keyword: "name", kind: "scalar", text: "Alice" }];
   const baseHash = valueHash(children, nameSchema, stubBlake3);
   const valid = encodeDocument(children, nameSchema, [baseHash]);
   const bytes = new Uint8Array(valid.length + 3);
   bytes.set(valid, 0);
-  assert.throws(() => decodeDocument(bytes, nameSchema),
+
+  // §6.3: an error only for a reader whose contract is "one document".
+  assert.throws(() => decodeDocumentWhole(bytes, nameSchema),
     e => e instanceof BintelDecodeError && e.code === BCode.B08);
+
+  const decoded = decodeDocument(bytes, nameSchema);
+  assert.equal(decoded.continuation, valid.length);
+  assert.deepEqual(Array.from(bytes.subarray(decoded.continuation)), [0, 0, 0]);
+  assert.ok(decodeDocumentWhole(valid, nameSchema));
 });
 
 // Hand-craft a valid 33-byte signature whose first 32 bytes are zero and
 // whose cadence trailer makes the byte-XOR equal 0x79.
+// Frame a hand-built body (everything after §6.1 field 2) as a complete
+// document, prepending the magic number and the declared document length.
+function frame(magic, body) {
+  const len = encodeVarint(body.length);
+  const out = new Uint8Array(magic.length + len.length + body.length);
+  out.set(magic, 0);
+  out.set(len, magic.length);
+  out.set(body, magic.length + len.length);
+  return out;
+}
+
+// Offset of the first byte after the document-length field.
+function bodyStart(bytes) {
+  return 4 + decodeVarint(bytes, 4).consumed;
+}
+
+// Offset of the first byte after the signature.
+function afterSignature(bytes) {
+  let at = bodyStart(bytes);
+  const { value, consumed } = decodeVarint(bytes, at);
+  return at + consumed + value;
+}
+
 function craftValidSignature() {
   const sig = new Uint8Array(33);
   sig[32] = SIGNATURE_CADENCE_BYTE; // all-zero body XOR is 0; trailer = 0 ^ 0x79.
@@ -333,10 +467,10 @@ test("decodeDocumentSelfContained: tampered embedded body → B11 or B12", () =>
     schemaChildren, tels: nameSchema,
     componentHashes: [baseHash],
   });
-  // Flip a byte in the embedded body. Layout: 4 magic + 1 sig_len_varint +
-  // 33 sig + 1 schema_len_varint (small) + N schema bytes + ...
-  // schema_len varint starts at offset 38; for a small embedded body it's 1 byte.
-  const schemaStart = 38 + 1;
+  // Flip a byte in the embedded body, locating it by walking the header
+  // rather than hard-coding an offset (§6.2 now begins with a length field).
+  const atSchemaLen = afterSignature(bytes);
+  const schemaStart = atSchemaLen + decodeVarint(bytes, atSchemaLen).consumed;
   bytes[schemaStart] ^= 0xFF;
 
   const buildSchema = (decodedSchemaChildren) => ({
@@ -401,11 +535,10 @@ test("value hash is mode-invariant: external and self-contained produce identica
   });
 
   // Strip headers and compare the trailing root encoding bytes.
-  // External: 4 magic + 1 sig_len + 33 sig + root.
-  const externalRoot = external.subarray(4 + 1 + 33);
-  // Self-contained: 4 magic + 1 sig_len + 33 sig + 1 schema_len + N schema + root.
-  const sc1 = decodeVarint(selfContained, 4 + 1 + 33);
-  const selfContainedRoot = selfContained.subarray(4 + 1 + 33 + sc1.consumed + sc1.value);
+  const externalRoot = external.subarray(afterSignature(external));
+  const scAfterSig = afterSignature(selfContained);
+  const sc1 = decodeVarint(selfContained, scAfterSig);
+  const selfContainedRoot = selfContained.subarray(scAfterSig + sc1.consumed + sc1.value);
   assert.deepEqual(Array.from(externalRoot), Array.from(selfContainedRoot),
     "root bytes are byte-identical between modes");
 
@@ -439,8 +572,21 @@ const decimalVarintCodec = {
     return encodeVarint(Number(text));
   },
   decode(bytes) {
-    const { value, consumed } = decodeVarint(bytes, 0);
-    if (consumed !== bytes.length) throw new Error("trailing bytes after varint");
+    // Deliberately *lenient*: this toy codec accepts overlong encodings so
+    // that the B15 canonicality check has something to catch. It must not
+    // reuse BinTEL's framing decodeVarint, which §4 requires to be strict
+    // about minimality — a codec is application-defined and independent of
+    // BinTEL's own framing.
+    let value = 0, shift = 1, i = 0, terminated = false;
+    while (i < bytes.length) {
+      const b = bytes[i++];
+      value += (b & 0x7F) * shift;
+      if (!Number.isSafeInteger(value)) throw new Error("varint too wide");
+      if ((b & 0x80) === 0) { terminated = true; break; }
+      shift *= 128;
+    }
+    if (!terminated) throw new Error("malformed varint");
+    if (i !== bytes.length) throw new Error("trailing bytes after varint");
     return String(value);
   },
 };

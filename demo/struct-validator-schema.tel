@@ -22,7 +22,7 @@ tel 1.0 specification.tel/tels:2.0.0
 #
 # See `demo/struct-validator-document.tel` for a document that
 # triggers the failure path, and `tests::struct_validator_worked_example`
-# in `src/lib.rs` for a runnable example.
+# in `ref/tel/src/lib.rs` for a runnable example.
 
 name event-log
 

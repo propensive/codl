@@ -19,6 +19,7 @@
 
 pub use base256;
 pub mod bintel;
+pub mod telp;
 pub mod canonical;
 pub mod containment;
 pub mod mutate;
@@ -2487,6 +2488,7 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
                     &def.members,
                     &layer.name,
                     &format!("record `{}`", def.name),
+                    &selects,
                     &mut errors,
                 );
                 let merged_validators = merge_validators(
@@ -2648,6 +2650,7 @@ pub fn compose_schema(s: &Schema) -> (Schema, Vec<SchemaError>) {
             &layer.overlay.members,
             &layer.name,
             "overlay",
+            &selects,
             &mut errors,
         );
         root_validators = merge_validators(&root_validators, &layer.overlay.validators);
@@ -2757,6 +2760,7 @@ fn merge_field_with(
     layer: &Field,
     layer_name: &str,
     where_: &str,
+    selects: &[SelectDefinition],
     errors: &mut Vec<SchemaError>,
 ) -> Option<Field> {
     let merged_required = merge_polarity(base.required, layer.required, true,
@@ -2769,6 +2773,7 @@ fn merge_field_with(
                 &gs.members, &fs.members,
                 layer_name,
                 &format!("{} → field `{}`", where_, layer.keyword),
+                selects,
                 errors,
             );
             let merged_inner_validators = merge_validators(&gs.validators, &fs.validators);
@@ -2822,11 +2827,27 @@ fn merge_validators(base: &[String], layer: &[String]) -> Vec<String> {
 
 /// Merge a layer's member operations into a base member list. Implements
 /// the inner loop of §20.3's MergeStruct algorithm.
+/// Every keyword a member occupies in its Struct's keyword space (§20): a
+/// `Field` contributes its own keyword, a `SelectRef` one per variant of the
+/// `SelectDefinition` it references.
+fn member_keywords(m: &Member, selects: &[SelectDefinition]) -> Vec<String> {
+    match m {
+        Member::Field(f) => vec![f.keyword.clone()],
+        Member::SelectRef(s) => selects
+            .iter()
+            .find(|sd| sd.name == s.reference)
+            .map(|sd| sd.variants.iter().map(|v| v.keyword.clone()).collect())
+            .unwrap_or_default(),
+        Member::Exclude(_) => Vec::new(),
+    }
+}
+
 fn merge_members(
     base: &[Member],
     layer_ops: &[Member],
     layer_name: &str,
     where_: &str,
+    selects: &[SelectDefinition],
     errors: &mut Vec<SchemaError>,
 ) -> Vec<Member> {
     let mut merged: Vec<Member> = base.to_vec();
@@ -2841,13 +2862,32 @@ fn merge_members(
                 match existing_idx {
                     Some(idx) => match &merged[idx] {
                         Member::Field(g) => {
-                            if let Some(field) = merge_field_with(g, f, layer_name, where_, errors) {
+                            if let Some(field) = merge_field_with(g, f, layer_name, where_, selects, errors) {
                                 merged[idx] = Member::Field(field);
                             }
                         }
                         _ => unreachable!(),
                     },
-                    None => merged.push(Member::Field(f.clone())),
+                    None => {
+                        // §20.3: the keyword must be free across the whole
+                        // merged keyword space, which includes the variant
+                        // keywords contributed by any existing SelectRef. A
+                        // collision there is E205, not a type mismatch.
+                        let taken = merged.iter().any(|m| {
+                            member_keywords(m, selects).iter().any(|k| *k == f.keyword)
+                        });
+                        if taken {
+                            errors.push(SchemaError {
+                                code: ErrorCode::E205,
+                                detail: format!(
+                                    "layer `{}` adds field `{}` to {}, but that keyword is already present in the merged struct",
+                                    layer_name, f.keyword, where_,
+                                ),
+                            });
+                        } else {
+                            merged.push(Member::Field(f.clone()));
+                        }
+                    }
                 }
             }
             Member::SelectRef(sref) => {
@@ -2878,7 +2918,30 @@ fn merge_members(
                             });
                         }
                     }
-                    None => merged.push(Member::SelectRef(sref.clone())),
+                    None => {
+                        let incoming = member_keywords(
+                            &Member::SelectRef(sref.clone()), selects);
+                        let clash: Vec<String> = incoming
+                            .iter()
+                            .filter(|k| {
+                                merged.iter().any(|m| {
+                                    member_keywords(m, selects).iter().any(|e| e == *k)
+                                })
+                            })
+                            .cloned()
+                            .collect();
+                        if clash.is_empty() {
+                            merged.push(Member::SelectRef(sref.clone()));
+                        } else {
+                            errors.push(SchemaError {
+                                code: ErrorCode::E205,
+                                detail: format!(
+                                    "layer `{}` adds select `{}` to {}, but its variant keyword(s) {} are already present in the merged struct",
+                                    layer_name, sref.reference, where_, clash.join(", "),
+                                ),
+                            });
+                        }
+                    }
                 }
             }
             Member::Exclude(kw) => {
@@ -3106,6 +3169,29 @@ impl RawLine {
 pub struct ParseResult {
     pub document: Document,
     pub errors: Vec<TelError>,
+    /// Where this document's **continuation** begins (§6.1): the zero-based
+    /// code-point offset of the first character after the document separator
+    /// that terminated it, in the same offset frame as diagnostic spans
+    /// (§19.3). `None` when the document ran to the end of the source without
+    /// a separator, so there is no continuation.
+    ///
+    /// §6.1 requires a parser to expose this in both parsing modes: the
+    /// content after a separator is exactly what single-document parsing
+    /// exists to preserve, and a caller cannot reach it otherwise.
+    /// [`ParseResult::continuation_str`] converts the offset back to a slice.
+    pub continuation: Option<usize>,
+}
+
+impl ParseResult {
+    /// The continuation as a slice of the original source, or `None` when the
+    /// document was not terminated by a separator. `input` MUST be the same
+    /// string that produced this result.
+    pub fn continuation_str<'a>(&self, input: &'a str) -> Option<&'a str> {
+        let cp = self.continuation?;
+        // `continuation` is a code-point offset; slicing needs a byte offset.
+        let byte = input.char_indices().nth(cp).map(|(b, _)| b).unwrap_or(input.len());
+        Some(&input[byte..])
+    }
 }
 
 /// Parse a single TEL document. Parsing stops at the first document
@@ -3208,8 +3294,17 @@ pub fn parse_stream_with_schema<'a>(input: &'a str, schema: &'a Schema) -> impl 
 fn parse_inner(input: &str, schema: Option<&Schema>) -> ParseResult {
     let mut p = ParserState::new(input);
     let prelude = p.prelude();
-    let (document, _next) = p.run_one(&prelude.raw_lines, 0, prelude.line_endings, schema);
-    ParseResult { document, errors: std::mem::take(&mut p.errors) }
+    let (document, next) = p.run_one(&prelude.raw_lines, 0, prelude.line_endings, schema);
+    let continuation = continuation_offset(&prelude.raw_lines, next);
+    ParseResult { document, errors: std::mem::take(&mut p.errors), continuation }
+}
+
+/// The code-point offset at which the continuation begins, given the raw-line
+/// index the document ended at. `next` addresses the line *after* the
+/// separator, so a `next` at or past the end means no separator terminated the
+/// document and there is nothing to continue with.
+fn continuation_offset(raw_lines: &[RawLine], next: usize) -> Option<usize> {
+    raw_lines.get(next).map(|l| l.start)
 }
 
 /// Result of the file-level parsing prelude shared by every document in a
@@ -3268,7 +3363,8 @@ impl<'a> Iterator for DocumentStream<'a> {
         );
         self.cursor = next;
         let errors = std::mem::take(&mut self.state.errors);
-        Some(ParseResult { document, errors })
+        let continuation = continuation_offset(&self.raw_lines, next);
+        Some(ParseResult { document, errors, continuation })
     }
 }
 
@@ -4141,6 +4237,32 @@ impl<'a> TreeCtx<'a> {
             }
         }
 
+        // E118 (overflow): §16.2 states column presence as a trichotomy —
+        // present, absent, or overflowed. A row whose content occupies the
+        // separator positions M_i − 2 / M_i − 1 with a non-space character has
+        // overflowed the preceding column (or, for i = 1, the row's
+        // keyword-and-pre-column-atom portion), and would otherwise silently
+        // lose its column structure. Positions inside a remark are exempt,
+        // as they are for E117.
+        let content_end = indent_spaces + check_end;
+        for &m_i in tab.marker_offsets.iter() {
+            if m_i < 2 { continue; }
+            // Absent: the row ends before reaching M_i − 2.
+            if content_end <= m_i - 2 { continue; }
+            let at = |p: usize| -> Option<char> {
+                if p < content_end { after.get(p).copied() } else { None }
+            };
+            let overflow = matches!(at(m_i - 2), Some(c) if c != ' ')
+                || matches!(at(m_i - 1), Some(c) if c != ' ');
+            if overflow {
+                self.errors.push(TelError::new(
+                    ErrorCode::E118,
+                    self.raw[ri].start + margin + (m_i - 2),
+                    self.raw[ri].start + margin + m_i.min(after.len()),
+                ));
+            }
+        }
+
         // E118: column width check
         for col_idx in 0..tab.marker_offsets.len() {
             let m_i = tab.marker_offsets[col_idx];
@@ -4217,6 +4339,7 @@ impl<'a> TreeCtx<'a> {
             }
             let text = self.consume_source_atom(ci + 2);
             compound.atoms.push(Atom::Source { text });
+            self.consume_duplicate_atoms(ci);
             return;
         }
 
@@ -4231,6 +4354,7 @@ impl<'a> TreeCtx<'a> {
             }
             if let Some((delim, text)) = self.consume_literal_atom(ci + 3) {
                 compound.atoms.push(Atom::Literal { delimiter: delim, text });
+                self.consume_duplicate_atoms(ci);
             }
             return;
         }
@@ -4241,6 +4365,40 @@ impl<'a> TreeCtx<'a> {
             compound.children = children;
         }
         // else: indent <= ci or indent > ci+3: don't consume
+    }
+
+    /// §14/§15: a compound may carry at most one source or literal atom.
+    /// Once one has been consumed, a further atom-triggering line immediately
+    /// after it is E113 (a source atom at indent+2) or E114 (a literal atom at
+    /// indent+3). The §19.5 recovery keeps the first atom and ignores the
+    /// duplicate, so the duplicate's lines are consumed and discarded — leaving
+    /// them unconsumed would instead surface as spurious E111 over-indentation.
+    ///
+    /// Only source-after-literal and literal-after-literal can reach here: a
+    /// source atom already absorbs every following line indented at least as
+    /// deeply as its first, so nothing can follow one at indent+2 or indent+3.
+    fn consume_duplicate_atoms(&mut self, ci: usize) {
+        loop {
+            let ri = self.idx;
+            if ri >= self.raw.len() || self.raw[ri].is_blank() {
+                return;
+            }
+            let (code, indent) = match self.line_indent(ri) {
+                Some(i) if i == ci + 2 => (ErrorCode::E113, i),
+                Some(i) if i == ci + 3 => (ErrorCode::E114, i),
+                _ => return,
+            };
+            self.errors.push(TelError::new(
+                code,
+                self.raw[ri].start,
+                self.raw[ri].start + self.raw[ri].chars.len(),
+            ));
+            if indent == ci + 2 {
+                let _ = self.consume_source_atom(ci + 2);
+            } else if self.consume_literal_atom(ci + 3).is_none() {
+                return;
+            }
+        }
     }
 
     fn consume_source_atom(&mut self, source_indent: usize) -> String {
@@ -4735,6 +4893,34 @@ mod tests {
         output
     }
 
+    /// A negative fixture is named for the error code it exercises
+    /// (`e117-hard-space-wrong-position.tel`). Returns that code in
+    /// `ErrorCode`'s `Debug` spelling, or `None` for a fixture that does not
+    /// follow the convention.
+    fn expected_code_from_name(path: &str) -> Option<String> {
+        let stem = std::path::Path::new(path).file_stem()?.to_string_lossy().to_string();
+        let head = stem.split('-').next()?.to_string();
+        let b = head.as_bytes();
+        if b.len() == 4 && b[0] == b'e' && b[1..].iter().all(|c| c.is_ascii_digit()) {
+            Some(head.to_uppercase())
+        } else {
+            None
+        }
+    }
+
+    /// Corpus fixtures are golden-compared, not merely probed for the presence
+    /// or absence of errors:
+    ///
+    /// * the generated dump MUST equal the committed `.check`, so a change in
+    ///   the parsed tree — or in the recovery applied to a bad line, which the
+    ///   dump captures — fails the suite instead of showing up as an invisible
+    ///   git diff;
+    /// * a negative fixture named for a code MUST actually raise that code, so
+    ///   the corpus verifies the spec-to-code mapping rather than just
+    ///   "something went wrong".
+    ///
+    /// Set `TEL_BLESS=1` to rewrite the goldens instead of comparing them, then
+    /// review the diff and commit it.
     fn run_test_with_timeout(path: &str, expect_errors: bool) -> (bool, String) {
         let input = match fs::read(path) {
             Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
@@ -4757,9 +4943,44 @@ mod tests {
                 let has_errors = !all_errors.is_empty();
                 let output = format_document(&result, &test_dir);
                 let check_path = path.replace(".tel", ".check");
-                let _ = fs::write(&check_path, &output);
-                let passed = if expect_errors { has_errors } else { !has_errors };
-                (passed, output)
+                let expected = fs::read_to_string(&check_path).ok();
+                let bless = std::env::var_os("TEL_BLESS").is_some();
+                if bless || expected.is_none() {
+                    let _ = fs::write(&check_path, &output);
+                }
+
+                let seen: Vec<String> =
+                    all_errors.iter().map(|e| format!("{:?}", e.code)).collect();
+                let mut problems: Vec<String> = Vec::new();
+
+                if has_errors != expect_errors {
+                    problems.push(if expect_errors {
+                        "expected at least one error, found none".to_string()
+                    } else {
+                        format!("expected no errors, found {:?}", seen)
+                    });
+                }
+
+                if expect_errors {
+                    if let Some(want) = expected_code_from_name(path) {
+                        if !seen.contains(&want) {
+                            problems.push(format!(
+                                "fixture is named for {} but raised {:?}", want, seen));
+                        }
+                    }
+                }
+
+                if !bless {
+                    if let Some(ref exp) = expected {
+                        if exp != &output {
+                            problems.push(
+                                "output differs from the committed .check golden \
+                                 (re-run with TEL_BLESS=1 to update)".to_string());
+                        }
+                    }
+                }
+
+                if problems.is_empty() { (true, output) } else { (false, problems.join("; ")) }
             }
             Err(_) => {
                 // Timed out — don't join the thread (it may be stuck)
@@ -4941,6 +5162,56 @@ mod tests {
     }
 
     // ── Schema unit tests ───────────────────────────────────────────────────
+
+    /// §6.1: a parser MUST expose the continuation in both modes — the
+    /// content after a separator is what single-document parsing exists to
+    /// preserve, and a caller cannot reach it otherwise.
+    #[test]
+    fn continuation_is_exposed_by_both_parsing_modes() {
+        let src = "tel 1.0\n\ntitle   Release notes\n##\nnot TEL at all: {\"json\": true}\n";
+        let r = parse(src);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        let cont = r.continuation_str(src).expect("a separator terminated the document");
+        assert_eq!(cont, "not TEL at all: {\"json\": true}\n");
+        // The document itself stopped at the separator.
+        let keywords: Vec<_> = r.document.children.iter()
+            .flat_map(|b| b.compounds.iter()).map(|c| c.keyword.clone()).collect();
+        assert_eq!(keywords, vec!["title"]);
+
+        // A document with no separator has no continuation.
+        let r2 = parse("tel 1.0\n\ntitle x\n");
+        assert_eq!(r2.continuation, None);
+        assert_eq!(r2.continuation_str("tel 1.0\n\ntitle x\n"), None);
+    }
+
+    /// §6.1: streaming parsing is recursion on single-document parsing — the
+    /// two modes can never disagree about where a document ends.
+    #[test]
+    fn streaming_equals_repeated_single_document_parsing() {
+        let src = "tel 1.0\n\na one\n##\ntel 1.0\n\nb two\n##\ntel 1.0\n\nc three\n";
+
+        // Drive single-document parsing over each continuation in turn.
+        let mut by_recursion = Vec::new();
+        let mut rest = src.to_string();
+        loop {
+            let r = parse(&rest);
+            by_recursion.push(
+                r.document.children.iter().flat_map(|b| b.compounds.iter())
+                    .map(|c| c.keyword.clone()).collect::<Vec<_>>());
+            match r.continuation_str(&rest) {
+                Some(c) if !c.trim().is_empty() => rest = c.to_string(),
+                _ => break,
+            }
+        }
+
+        let by_stream: Vec<Vec<String>> = parse_stream(src)
+            .map(|r| r.document.children.iter().flat_map(|b| b.compounds.iter())
+                .map(|c| c.keyword.clone()).collect())
+            .collect();
+
+        assert_eq!(by_recursion, by_stream);
+        assert_eq!(by_stream, vec![vec!["a"], vec!["b"], vec!["c"]]);
+    }
 
     #[test]
     fn builtin_tels_is_valid() {
@@ -6245,6 +6516,72 @@ layer fancy
                    Re-run with DUMP_TELS_BINTEL=1 to regenerate the demo artefacts.",
                    hash.iter().map(|b| format!("{:02x}", b)).collect::<String>(),
                    bytes.len());
+
+        // demo/tels.bintel.hex is cited normatively by §20.5 of the TEL
+        // Specification and §3 of the BinTEL Specification, so it is pinned
+        // too — otherwise it could drift from the hash it is supposed to
+        // explain, and nothing would notice.
+        let pinned_hex = fs::read_to_string("../../demo/tels.bintel.hex")
+            .expect("demo/tels.bintel.hex must exist");
+        let pinned_bytes = hex_decode(pinned_hex.trim());
+        assert_eq!(bytes, pinned_bytes,
+                   "BinTEL encoding of tels.tel differs from demo/tels.bintel.hex \
+                   ({} bytes computed, {} bytes pinned)",
+                   bytes.len(), pinned_bytes.len());
+
+        // Both specifications state the byte count in prose.
+        assert_eq!(bytes.len(), 1741,
+                   "§20.5 of the TEL Specification and §3 of the BinTEL \
+                   Specification both state that the BinTEL document-root \
+                   encoding of tels.tel is 1741 bytes");
+
+        // demo/tels.hash also carries the BASE-256 form of the same digest;
+        // only the blake3 line was previously checked.
+        let hash_file = fs::read_to_string("../../demo/tels.hash").unwrap();
+        let b256_line = hash_file.lines()
+            .find(|l| l.starts_with("base256:"))
+            .expect("demo/tels.hash must contain a `base256:` line");
+        let b256 = b256_line.trim_start_matches("base256:").trim();
+        assert_eq!(b256, base256::encode(&hash),
+                   "the base256: line of demo/tels.hash does not encode the blake3: line");
+        assert_eq!(b256.chars().count(), 32,
+                   "BASE-256 is character-per-byte, so a 32-byte digest is 32 characters");
+    }
+
+    /// Every `demo/*.tel` file is a worked example cited from the demo README
+    /// and, indirectly, from §25 of the TEL Specification. They must at least
+    /// parse without a single E1xx error — a claim demo/README.md makes
+    /// explicitly, and which nothing previously checked. (Schema-level
+    /// checking is covered per-file by the worked-example tests below.)
+    #[test]
+    fn demo_files_parse_without_error() {
+        let mut entries: Vec<_> = fs::read_dir("../../demo").unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|x| x == "tel").unwrap_or(false))
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+        assert!(!entries.is_empty(), "demo/ must contain .tel files");
+
+        let mut failures = Vec::new();
+        for entry in entries {
+            let path = entry.path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            let source = fs::read_to_string(&path).unwrap();
+            // document-stream.tel is a multi-document source (§6.1) and must
+            // be read with the streaming parser.
+            let errors: Vec<TelError> = if name == "document-stream.tel" {
+                parse_stream(&source).flat_map(|r| r.errors).collect()
+            } else {
+                parse(&source).errors
+            };
+            if !errors.is_empty() {
+                failures.push(format!(
+                    "  {}: {:?}", name,
+                    errors.iter().map(|e| format!("{:?}", e.code)).collect::<Vec<_>>()));
+            }
+        }
+        assert!(failures.is_empty(),
+                "demo files with parse errors:\n{}", failures.join("\n"));
     }
 
     #[test]
@@ -6829,6 +7166,22 @@ layer fancy
         assert_eq!(bytes, expected,
                    "walkthrough BinTEL bytes differ from the values pinned in \
                    demo/walkthrough.md");
+        assert_eq!(bytes.len(), 16, "walkthrough.md §5 says the root is 16 bytes");
+
+        // demo/walkthrough.md §7 shows the complete framed document, including
+        // the §6.1 field 2 document length. Pin that too, so the walkthrough's
+        // byte-by-byte table cannot drift from the format.
+        let hash = bintel::value_hash(&parsed.document, &schema);
+        let full = bintel::encode_document_with_signature(&parsed.document, &schema, &[hash]);
+        assert_eq!(&full[0..4], &[0xB2, 0xC4, 0xB5, 0xBB], "external-schema magic");
+        assert_eq!(full[4], 0x32,
+                   "walkthrough.md §7 shows a document length of 50 (0x32): \
+                   1 byte of signature length + 33 of signature + 16 of root");
+        assert_eq!(full[5], 0x21, "signature length 33");
+        assert_eq!(full.len(), 4 + 1 + 50);
+        // And the framing agrees with the structural decode.
+        let decoded = bintel::decode_document_whole(&full, &schema).unwrap();
+        assert_eq!(decoded.continuation, full.len());
     }
 
     /// Diagnostic helper — prints the bytes/hash for human inspection. Run
