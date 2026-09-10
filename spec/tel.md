@@ -442,6 +442,20 @@ converse does not hold in general: a consumer expecting `S_doc` cannot necessari
 carrying a supertype `S_cons`, since `S_doc` may require additional layers (and therefore members)
 that the supertype does not supply.
 
+The "compatible" row of the table means *decode under `S_doc`, then project to `S_cons`*
+(§24.5). For BinTEL input this ordering is mandatory rather than merely conceptual: keyword
+indices are positions in the keyword order of the document's composed schema (§5 and §7.7 of
+the BinTEL Specification), and a layer may shift them (an `exclude` removes Select variants,
+which are interleaved in keyword order), so the document root cannot be read under any
+composition other than the one its signature names. A parser given an invocation schema MUST
+therefore still resolve every component of `S_doc` — through the Resolution Protocol below or,
+in self-contained mode (§6.2 of the BinTEL Specification), from the embedded schema body —
+before the compatibility check is applied; an unknown component of `S_doc` is a resolution
+failure even when `S_cons` is a strict prefix of what could be decoded. A consumer that knows
+optional layers it can exploit but does not require SHOULD therefore state the *shortest*
+composition it needs as its invocation schema and treat the further layers as opportunistic;
+see §8.3 of the BinTEL Specification for the consequences in bidirectional exchange.
+
 #### Resolution Protocol
 
 A parser presented with a document schema MUST resolve it to a `Schema` value (as defined in §20)
@@ -4091,6 +4105,11 @@ LSP gives the schema ecosystem a useful guarantee:
   a supertype of the composed-with-more-layers schema, so a document written against the
   longer composition can be consumed (after projection) by a tool expecting the shorter
   composition.
+- **A producer can always degrade.** A producer holding a value of a subtype composition can
+  serve any consumer that names a subsequence of that composition (one that itself composes
+  validly under §20.3) by projecting the value per §24.5 and re-encoding it under the shorter
+  composition. Projection is lossy only in the members the consumer could not address anyway.
+  §8.3 of the BinTEL Specification builds on this to describe schema exchange between peers.
 - **`construct` operations** (§22.2) can target the supertype's schema: a freshly
   constructed compound that satisfies the supertype's required-set is automatically a
   valid subtype value at any position where the subtype permits the same members. (The
