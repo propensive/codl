@@ -700,6 +700,84 @@ decoding the document root.
 Schema compatibility is defined in §8.2 of the TEL Specification in terms of subsequence
 relationships between decoded signature hash sequences.
 
+### 8.3 Schema Exchange Between Peers
+
+*This subsection is informative.* It describes how the normative machinery above behaves when
+BinTEL documents are exchanged between two parties — a client and a server, or any pair of
+peers — whose libraries of schema components differ. BinTEL itself defines no handshake,
+request, or negotiation message: the carrier for any exchange described here is the embedding
+protocol's concern (§6), and this specification supplies only the vocabulary — signatures,
+component hashes, and the subsequence rule.
+
+**Two independent questions.** Whether a receiver can process a document tagged with signature
+`S_doc` splits into:
+
+1. **Decodability.** The document root can be read only under the exact composition `S_doc`
+   names, because keyword indices are positions in that composition's keyword order (§5,
+   §7.7) and a layer may shift them. In external-schema mode (§6.1) every component hash of
+   `S_doc` must therefore resolve — from the receiver's library, cache, or LIRA (§8.2 of the
+   TEL Specification) — or decoding fails. In self-contained mode (§6.2) the schema body is
+   inline, and a receiver holding only the `tels` axiom can decode any document at all.
+2. **Compatibility.** Having decoded, the receiver checks `S_doc <: S_cons` against its own
+   invocation schema `S_cons`: `S_cons`'s hash sequence must be a subsequence of `S_doc`'s
+   (§8.2 of the TEL Specification). The direction matters: a receiver may consume documents
+   composed with *more* layers than it expects (by projection, §24.5 of the TEL
+   Specification), never fewer.
+
+**Worked example.** A receiver whose library holds a base schema `foo` and layers `bar` and
+`baz` receives documents in external-schema mode:
+
+| Document composition | Decodable? | Compatible with `S_cons = foo`? | Compatible with `S_cons = foo+bar+baz`? |
+| -------------------- | ---------- | ------------------------------- | --------------------------------------- |
+| `foo`                | yes        | yes (matching)                  | no                                      |
+| `foo+bar`            | yes        | yes                             | no                                      |
+| `foo+baz`            | yes        | yes                             | no                                      |
+| `foo+bar+baz`        | yes        | yes                             | yes (matching)                          |
+| `foo+quux`           | no         | —                               | —                                       |
+
+The last row becomes decodable, and compatible with `S_cons = foo`, if the sender uses
+self-contained mode. The right-hand column shows why a receiver's invocation schema should be
+its *minimum* requirement: a receiver that demands `foo+bar+baz` rejects every document that
+omits an optional layer, whereas one that demands `foo` and exploits `bar` and `baz` when the
+decoded composition contains them accepts all four decodable rows.
+
+**Receiver guidance.** State the shortest composition you need as the invocation schema. Treat
+every further layer in your library as opportunistic: after decoding under `S_doc`, the
+members of any layer present in `S_doc` are available in the semantic model, and projection to
+`S_cons` discards only what you cannot address anyway.
+
+**Sender guidance.** Send the richest composition the receiver can resolve. A sender holding a
+value under `S` can always degrade it to any composition `S'` whose hash sequence is a
+subsequence of `S`'s and which composes validly, by projecting (§24.5 of the TEL
+Specification) and re-encoding under `S'`; degradation is always available, so the only
+question is how the sender learns which `S'` the receiver can resolve.
+
+**Partial decode as a diagnostic.** The palimpsest decode of §8.2 recovers components in order
+— `h₀` by four-byte prefix, each subsequent layer by two-byte prefix — and a failure at step
+`i` therefore tells the receiver that it holds components `0 … i−1` and lacks component `i`.
+The signature alone thus identifies the longest prefix of the sender's composition that the
+receiver can name back, which is the natural content of a "please degrade" reply.
+
+**Mechanisms, in increasing cost.** All three sit entirely within the embedding protocol:
+
+- *Self-contained first message.* The sender uses self-contained mode until the receiver
+  confirms, by whatever means the embedding provides, that it now holds the signature; the
+  receiver caches the verified schema (§8.2 of the TEL Specification, Caching) and both sides
+  switch to external-schema mode. No negotiation round-trip is needed; the cost is the schema
+  body on early messages. This is the recommended default for peers that cannot assume a
+  shared library.
+- *Signature probe.* The sender transmits only its intended signature (33–41 bytes for typical
+  compositions). The receiver runs the palimpsest decode and replies with the longest prefix it
+  holds, or with the signature of the composition it prefers. The sender then degrades to that
+  composition. One round-trip; no schema bytes.
+- *Capability exchange.* Each peer advertises the component hashes (or full signatures) it
+  holds, once per connection. Each sender then picks the longest subsequence of its own
+  composition that the receiver holds. Suits long-lived sessions with many messages.
+
+None of these changes the wire format of a BinTEL document, and none is required: a receiver
+that can resolve through LIRA, or a sender that always uses self-contained mode, needs no
+exchange at all.
+
 ## 9. Textual Encoding
 
 A BinTEL byte sequence MAY be represented as Unicode text by applying the BASE-256 encoding defined
